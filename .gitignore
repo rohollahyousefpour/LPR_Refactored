@@ -1,0 +1,63 @@
+# Build
+build/
+out/
+target/
+cmake-build-*/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.so
+*.dylib
+*.dll
+*.lib
+*.a
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Visual Studio
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sdf
+*.opensdf
+*.pdb
+*.ipch
+*.idb
+*.ilk
+*.log
+*.cache
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# vcpkg
+vcpkg_installed/
+
+# Misc
+*.bak
+*.tmp
+*.d
+*.pch

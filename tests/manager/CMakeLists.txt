@@ -1,0 +1,11 @@
+if(TARGET lpr_manager)
+  add_executable(test_camera_manager test_camera_manager.cpp)
+  target_link_libraries(test_camera_manager PRIVATE lpr_manager)
+  add_test(NAME camera_manager COMMAND test_camera_manager)
+endif()
+
+if(TARGET lpr_manager)
+  add_executable(test_detection_worker test_detection_worker.cpp)
+  target_link_libraries(test_detection_worker PRIVATE lpr_manager)
+  add_test(NAME detection_worker COMMAND test_detection_worker)
+endif()

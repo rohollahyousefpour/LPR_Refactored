@@ -1,0 +1,205 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "tests-only",
+      "displayName": "Tests only (no OpenCV)",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "LPR_BUILD_CONFIG_LIB": "OFF",
+        "LPR_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "full",
+      "displayName": "Full config library (system OpenCV)",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "LPR_BUILD_CONFIG_LIB": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "tests-debug",
+      "displayName": "Tests (Debug, no OpenCV)",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "LPR_BUILD_CONFIG_LIB": "OFF",
+        "LPR_BUILD_TESTS": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "full-vcpkg",
+      "inherits": "full",
+      "displayName": "Full config library (vcpkg) - needs VCPKG_ROOT set",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "full-vcpkg-gst",
+      "inherits": "full-vcpkg",
+      "displayName": "Full + GStreamer RTSP (vcpkg feature)",
+      "cacheVariables": {
+        "WITH_GSTREAMER": "ON",
+        "VCPKG_MANIFEST_FEATURES": "gstreamer"
+      }
+    },
+    {
+      "name": "full-vcpkg-nats-gst",
+      "inherits": "full-vcpkg",
+      "displayName": "Full + NATS + GStreamer (vcpkg features)",
+      "cacheVariables": {
+        "WITH_NATS": "ON",
+        "WITH_GSTREAMER": "ON",
+        "VCPKG_MANIFEST_FEATURES": "nats;gstreamer"
+      }
+    },
+    {
+      "name": "full-vcpkg-ov",
+      "inherits": "full-vcpkg",
+      "displayName": "Full + OpenVINO (reads OpenVINO_DIR from env / setupvars)",
+      "cacheVariables": {
+        "WITH_OPENVINO": "ON",
+        "OpenVINO_DIR": "$env{OpenVINO_DIR}"
+      }
+    },
+    {
+      "name": "full-vcpkg-ov-nats-gst",
+      "inherits": "full-vcpkg",
+      "displayName": "Full + OpenVINO + NATS + GStreamer (live deployment)",
+      "cacheVariables": {
+        "WITH_OPENVINO": "ON",
+        "OpenVINO_DIR": "$env{OpenVINO_DIR}",
+        "WITH_NATS": "ON",
+        "WITH_GSTREAMER": "ON",
+        "VCPKG_MANIFEST_FEATURES": "nats;gstreamer"
+      }
+    },
+    {
+      "name": "full-vcpkg-all",
+      "inherits": "full-vcpkg",
+      "displayName": "Everything via vcpkg: OpenVINO + NATS + GStreamer (Basler installed separately)",
+      "cacheVariables": {
+        "WITH_OPENVINO": "ON",
+        "WITH_NATS": "ON",
+        "WITH_GSTREAMER": "ON",
+        "VCPKG_MANIFEST_FEATURES": "openvino;nats;gstreamer"
+      }
+    },
+    {
+      "name": "full-vcpkg-ov-gst",
+      "inherits": "full-vcpkg",
+      "displayName": "Full + OpenVINO + GStreamer via vcpkg + Pylon (auto-detected); no NATS",
+      "cacheVariables": {
+        "WITH_OPENVINO": "ON",
+        "WITH_GSTREAMER": "ON",
+        "WITH_PYLON": "ON",
+        "VCPKG_MANIFEST_FEATURES": "openvino;gstreamer"
+      }
+    },
+    {
+      "name": "full-vcpkg-sdk",
+      "inherits": "full-vcpkg",
+      "displayName": "Full + OpenVINO/GStreamer/Pylon from INSTALLED SDK paths (env vars; no source build)",
+      "cacheVariables": {
+        "WITH_OPENVINO": "ON",
+        "OpenVINO_DIR": "$env{OpenVINO_DIR}",
+        "WITH_GSTREAMER": "ON",
+        "GSTREAMER_ROOT": "$env{GSTREAMER_1_0_ROOT_MSVC_X86_64}",
+        "WITH_PYLON": "ON",
+        "PYLON_ROOT": "$env{PYLON_DEV_DIR}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "tests-only",
+      "configurePreset": "tests-only",
+      "configuration": "Release"
+    },
+    {
+      "name": "full",
+      "configurePreset": "full",
+      "configuration": "Release"
+    },
+    {
+      "name": "tests-debug",
+      "configurePreset": "tests-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "full-vcpkg",
+      "configurePreset": "full-vcpkg",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-gst",
+      "configurePreset": "full-vcpkg-gst",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-nats-gst",
+      "configurePreset": "full-vcpkg-nats-gst",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-ov",
+      "configurePreset": "full-vcpkg-ov",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-ov-nats-gst",
+      "configurePreset": "full-vcpkg-ov-nats-gst",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-all",
+      "configurePreset": "full-vcpkg-all",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-ov-gst",
+      "configurePreset": "full-vcpkg-ov-gst",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-vcpkg-sdk",
+      "configurePreset": "full-vcpkg-sdk",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests-only",
+      "configurePreset": "tests-only",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-debug",
+      "configurePreset": "tests-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "full",
+      "configurePreset": "full",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "full-vcpkg",
+      "configurePreset": "full-vcpkg",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

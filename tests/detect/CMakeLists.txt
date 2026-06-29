@@ -1,0 +1,21 @@
+if(TARGET lpr_detect)
+  add_executable(test_ctc_decode test_ctc_decode.cpp)
+  target_link_libraries(test_ctc_decode PRIVATE lpr_detect)
+  add_test(NAME ctc_decode COMMAND test_ctc_decode)
+
+  add_executable(test_infer_factory test_infer_factory.cpp)
+  target_link_libraries(test_infer_factory PRIVATE lpr_detect)
+  add_test(NAME infer_factory COMMAND test_infer_factory)
+endif()
+
+if(TARGET lpr_detect)
+  add_executable(test_east_decode test_east_decode.cpp)
+  target_link_libraries(test_east_decode PRIVATE lpr_detect)
+  add_test(NAME east_decode COMMAND test_east_decode)
+endif()
+
+if(TARGET lpr_detect)
+  add_executable(test_roi_crop test_roi_crop.cpp)
+  target_link_libraries(test_roi_crop PRIVATE lpr_detect)
+  add_test(NAME roi_crop COMMAND test_roi_crop)
+endif()

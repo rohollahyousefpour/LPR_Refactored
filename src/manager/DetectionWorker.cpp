@@ -1,0 +1,264 @@
+#include "lpr/manager/DetectionWorker.h"
+#include "lpr/Log.h"
+#include "lpr/manager/LiveOverlay.h"
+#include "lpr/util/Time.h"
+
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgproc.hpp>
+#include <chrono>
+#include <cmath>
+#include <map>
+
+namespace lpr {
+
+DetectionWorker::DetectionWorker(std::shared_ptr<FrameQueue> input, IPlateRecognizer& recognizer, Config cfg)
+    : input_(std::move(input)), recognizer_(recognizer), cfg_(cfg) { dir_.setConfig(cfg_.direction); }
+
+DetectionWorker::~DetectionWorker() { stop(); }
+
+void DetectionWorker::setPlateQueue(std::shared_ptr<PlateQueue> q) {
+    plateQueue_ = std::move(q);
+    auto qref = plateQueue_;
+    sink_ = [qref](PlateItem&& it) { if (qref) qref->push(std::move(it)); };
+}
+
+void DetectionWorker::setPlateFilter(PlateFilter f) {
+    processor_ = [f = std::move(f)](PlateResult&& p) -> std::optional<PlateResult> {
+        if (f && !f(p)) return std::nullopt;
+        return std::optional<PlateResult>(std::move(p));
+    };
+}
+
+void DetectionWorker::start() {
+    if (running_.exchange(true)) return;
+    if (thread_.joinable()) thread_.join();   // join a previously stopped run
+    thread_ = std::thread(&DetectionWorker::run, this);
+}
+
+void DetectionWorker::stop() {
+    running_ = false;
+    if (thread_.joinable()) thread_.join();
+}
+
+void DetectionWorker::run() {
+    if (!input_) { LOGE() << "DetectionWorker: no input queue"; running_ = false; return; }
+    LOGI() << "DetectionWorker: started";
+    while (running_) {
+        auto item = input_->popFor(std::chrono::milliseconds(cfg_.popTimeoutMs));
+        if (!item) {
+            if (input_->isClosed() && input_->empty()) break;   // drained + closed -> exit
+            continue;                                           // timeout -> re-check running_
+        }
+        process(*item);
+    }
+    LOGI() << "DetectionWorker: stopped (frames=" << framesProcessed_
+           << ", plates=" << platesEmitted_ << ")";
+}
+
+void DetectionWorker::process(FrameItem& item) {
+    ++framesProcessed_;
+    if (item.image.empty()) return;
+
+    // Periodic throughput so it's clear frames are reaching the queue (every 100 frames).
+    if (framesProcessed_ % 100 == 0)
+        LOGI() << "DetectionWorker: processed " << framesProcessed_ << " frames, "
+               << platesEmitted_ << " plates so far";
+
+    // Per-frame collaborators (recording, live view) see the frame first. Guard each so a
+    // misbehaving observer can't take down the worker, and log it.
+    for (auto& obs : observers_) {
+        try { obs(item); }
+        catch (const std::exception& e) { LOGE() << "DetectionWorker: frame observer threw: " << e.what(); }
+        catch (...)                     { LOGE() << "DetectionWorker: frame observer threw (unknown)"; }
+    }
+
+    // Detect + OCR once; we reuse the results for both the debug preview and the sink.
+    std::vector<PlateResult> results;
+    try {
+        results = recognizer_.recognize(item.image, item.gate, item.timestamp);
+    } catch (const std::exception& e) {
+        LOGE() << "DetectionWorker[" << item.gate << "]: recognition error: " << e.what();
+    } catch (...) {
+        LOGE() << "DetectionWorker[" << item.gate << "]: recognition error (unknown)";
+    }
+
+    // Hand the newest annotations to the live stream (drawn onto the continuously-fed live frames
+    // by LiveOverlay::draw). Done for EVERY frame, independent of show_live, so the dashboard live
+    // view shows vehicle boxes / plate boxes / count - not just the local preview window.
+    const std::vector<VehicleAnnotation> vehicles = recognizer_.lastVehicles();
+    const int vehicleCount = recognizer_.totalVehicleCount();
+    if (overlay_) {
+        std::vector<LiveOverlay::Plate> plates;
+        plates.reserve(results.size());
+        for (const PlateResult& r : results) plates.push_back({ r.box, r.text, r.plateImage });
+        overlay_->publish(item.gate, vehicles, std::move(plates), vehicleCount);
+    }
+    LOGD() << "DetectionWorker[" << item.gate << "]: vehicles=" << vehicles.size()
+           << " plates=" << results.size() << " count=" << vehicleCount;
+
+    // Debug preview (original 'show_live'): draw the recognition polygon, each plate box and its
+    // text on a copy of the frame, then display it in a per-gate window.
+    if (cfg_.showLive) {
+        try {
+            cv::Mat canvas = item.image.clone();
+            if (roiPolygon_) {
+                std::vector<cv::Point> poly = roiPolygon_(item.gate, item.image.cols, item.image.rows);
+                if (poly.size() >= 3)
+                    cv::polylines(canvas, poly, true, cv::Scalar(255, 0, 0), 2);
+            }
+
+            // Vehicle-detection overlay: box every detected vehicle (cyan), label its track id,
+            // show a thumbnail of the largest vehicle crop (top-right), and a running count.
+            const cv::Rect frameRect(0, 0, canvas.cols, canvas.rows);
+            const cv::Rect* biggest = nullptr;
+            for (const VehicleAnnotation& v : vehicles) {
+                cv::Rect b = v.box & frameRect;
+                if (b.width < 2 || b.height < 2) continue;
+                cv::rectangle(canvas, b, cv::Scalar(255, 200, 0), 2);   // cyan-ish vehicle box
+                if (v.trackId >= 0) {
+                    const std::string id = "#" + std::to_string(v.trackId);
+                    cv::putText(canvas, id, {b.x, std::max(0, b.y) + 18},
+                                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 0), 4);
+                    cv::putText(canvas, id, {b.x, std::max(0, b.y) + 18},
+                                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(255, 200, 0), 2);
+                }
+                if (!biggest || b.area() > biggest->area()) biggest = &v.box;
+            }
+
+            for (const PlateResult& r : results) {
+                cv::Point2f pts[4]; r.box.points(pts);
+                for (int i = 0; i < 4; ++i) cv::line(canvas, pts[i], pts[(i + 1) % 4], cv::Scalar(0, 255, 0), 2);
+                cv::Point org(static_cast<int>(r.box.center.x - r.box.size.width / 2),
+                              static_cast<int>(r.box.center.y - r.box.size.height / 2) - 6);
+                cv::putText(canvas, r.text, org, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 4);
+                cv::putText(canvas, r.text, org, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+            }
+
+            // Cropped-vehicle thumbnail (largest vehicle) pinned to the top-right corner.
+            if (biggest) {
+                cv::Rect b = *biggest & frameRect;
+                if (b.width >= 2 && b.height >= 2) {
+                    const int tw = 220;
+                    const int th = std::max(1, b.height * tw / std::max(1, b.width));
+                    cv::Mat thumb; cv::resize(canvas(b), thumb, cv::Size(tw, th));
+                    cv::Rect dst(canvas.cols - tw - 10, 10, tw, th);
+                    dst &= frameRect;
+                    if (dst.width == tw && dst.height == th) {
+                        thumb.copyTo(canvas(dst));
+                        cv::rectangle(canvas, dst, cv::Scalar(255, 200, 0), 2);
+                    }
+                }
+            }
+
+            // Live vehicle count (top-left). totalVehicleCount() is -1 outside vehicle mode.
+
+            if (vehicleCount >= 0) {
+                const std::string label = "Vehicles: " + std::to_string(vehicleCount);
+                cv::putText(canvas, label, {12, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 0, 0), 5);
+                cv::putText(canvas, label, {12, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 255, 0), 2);
+            }
+
+            cv::Mat view = canvas;
+            if (cfg_.liveScale > 1) cv::resize(canvas, view, canvas.size() / cfg_.liveScale);
+            const std::string win = item.gate.empty() ? "live" : item.gate;
+            cv::namedWindow(win, cv::WINDOW_NORMAL);   // resizable window, as in the original
+            cv::imshow(win, view);
+            cv::waitKey(1);
+        } catch (const cv::Exception& e) { LOGW() << "DetectionWorker: show_live draw failed: " << e.what(); }
+    }
+
+    // Build the evidence/full image once for this frame: stamp the PC date/time (top-left) and
+    // draw the detected plate boxes + text, so the operator's evidence frame shows what was read
+    // and when. Shared by all plates kept from this frame. Toggle with 'evidence_overlay'.
+    cv::Mat evidence = item.evidenceImage.empty() ? item.image : item.evidenceImage;
+    if (cfg_.annotateEvidence && !results.empty() && !evidence.empty()) {
+        cv::Mat canvas = evidence.clone();
+        for (const PlateResult& r : results) {
+            cv::Point2f pts[4]; r.box.points(pts);
+            for (int i = 0; i < 4; ++i)
+                cv::line(canvas, pts[i], pts[(i + 1) % 4], cv::Scalar(0, 255, 0), 2);
+            cv::Point org(static_cast<int>(r.box.center.x - r.box.size.width / 2),
+                          static_cast<int>(r.box.center.y - r.box.size.height / 2) - 6);
+            cv::putText(canvas, r.text, org, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 0), 4);
+            cv::putText(canvas, r.text, org, cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+        }
+        // PC date/time, top-left (white with a black outline), sized to the frame width.
+        const std::string ts = formatLocalTime("%Y-%m-%d %H:%M:%S");
+        const double tscale = std::max(1.0, canvas.cols / 1200.0);
+        const int    tth    = std::max(2, (int)std::lround(tscale * 2));
+        const int    tY     = (int)std::lround(tscale * 28);
+        cv::putText(canvas, ts, {12, tY}, cv::FONT_HERSHEY_SIMPLEX, tscale, cv::Scalar(0, 0, 0), tth * 2);
+        cv::putText(canvas, ts, {12, tY}, cv::FONT_HERSHEY_SIMPLEX, tscale, cv::Scalar(255, 255, 255), tth);
+
+        // Inset each plate's cropped picture as a zoomed thumbnail down the top-right, so the
+        // evidence frame shows a readable close-up of the plate, not just the box.
+        int insetY = 12;
+        const int insetH = 70, margin = 12;
+        for (const PlateResult& r : results) {
+            if (r.plateImage.empty() || insetY + insetH + 4 >= canvas.rows) continue;
+            cv::Mat thumb = r.plateImage;
+            if (thumb.channels() == 1) cv::cvtColor(thumb, thumb, cv::COLOR_GRAY2BGR);
+            const int w = std::max(1, (int)std::lround(thumb.cols * (double)insetH / thumb.rows));
+            cv::Mat resized; cv::resize(thumb, resized, cv::Size(w, insetH));
+            const int x = std::max(0, canvas.cols - w - margin);
+            cv::Rect dst(x, insetY, std::min(w, canvas.cols - x), insetH);
+            resized(cv::Rect(0, 0, dst.width, dst.height)).copyTo(canvas(dst));
+            cv::rectangle(canvas, dst, cv::Scalar(0, 255, 255), 2);
+            insetY += insetH + 8;
+        }
+        evidence = canvas;
+        LOGI() << "DetectionWorker[" << item.gate << "]: evidence annotated time='" << ts
+               << "' plate_boxes=" << results.size();
+    }
+
+    // Infer enter/exit from how the plate's apparent size changes across sightings (low,
+    // plate-facing camera). Feed every raw detection once per frame; tag emitted plates with
+    // the committed direction. Uses a steady-clock ms timestamp so gap/cooldown are wall-time.
+    std::map<std::string, int> dirByText;
+    if (cfg_.directionEnable && !results.empty()) {
+        const long nowMs = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        // Per-camera polarity: does a plate approaching the camera mean ENTER? (Entry_Exit=0)
+        const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(item.gate) : true;
+        for (const PlateResult& r : results) {
+            if (r.text.empty()) continue;
+            const double sz = std::sqrt(std::max(0.0f, r.box.size.width * r.box.size.height));
+            const std::string dkey = item.gate + ":" + r.text;
+            const int event    = dir_.update(dkey, sz, r.box.center.y, nowMs); // non-Unknown ONLY on commit
+            const int standing = dir_.current(dkey);                           // committed dir for this pass
+            int direction = 0;   // 0 unknown, 1 enter, 2 exit
+            if (standing == DirectionEstimator::Approaching) direction = approachEnter ? 1 : 2;
+            else if (standing == DirectionEstimator::Receding) direction = approachEnter ? 2 : 1;
+            dirByText[r.text] = direction;
+            if (event != DirectionEstimator::Unknown)   // fire the enter/exit log exactly once per pass
+                LOGI() << "DetectionWorker[" << item.gate << "]: " << r.text << " "
+                       << (event == DirectionEstimator::Approaching ? "approaching" : "receding")
+                       << " -> " << (direction == 1 ? "ENTER" : "EXIT")
+                       << " (Entry_Exit polarity approach=" << (approachEnter ? "enter" : "exit") << ")";
+        }
+    }
+
+    // Run each recognized plate through the processor (dedup/validate/tag) and sink the survivors.
+    for (PlateResult& p : results) {
+        std::optional<PlateResult> kept =
+            processor_ ? processor_(std::move(p))
+                       : std::optional<PlateResult>(std::move(p));
+        if (!kept) continue;                          // processor dropped it (dup / invalid)
+
+        PlateItem out;
+        // Detection ran on item.image (mono in a pair); the evidence/full_image is the RGB
+        // companion frame when present, else the same detection frame (single camera).
+        out.image     = evidence;
+        out.plate     = std::move(*kept);
+        out.gate      = item.gate;
+        out.timestamp = item.timestamp;
+        if (out.plate.direction == 0) {
+            auto dit = dirByText.find(out.plate.text);
+            if (dit != dirByText.end()) out.plate.direction = dit->second;
+        }
+        ++platesEmitted_;
+        if (sink_) sink_(std::move(out));
+    }
+}
+
+} // namespace lpr

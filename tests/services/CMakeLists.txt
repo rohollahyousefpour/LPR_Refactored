@@ -1,0 +1,5 @@
+if(TARGET lpr_services)
+  add_executable(test_services test_services.cpp)
+  target_link_libraries(test_services PRIVATE lpr_services)
+  add_test(NAME services COMMAND test_services)
+endif()

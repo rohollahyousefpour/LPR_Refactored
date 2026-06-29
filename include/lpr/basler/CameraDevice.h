@@ -1,0 +1,76 @@
+#pragma once
+//
+// CameraDevice
+// ------------
+// A RAII wrapper around exactly one Pylon::CBaslerUniversalInstantCamera.
+//
+// Responsibility (single):
+//   Own the lifetime of one physical camera handle and expose safe, narrow
+//   operations on it (open, close, grab, release). It does NOT decide policy
+//   (exposure values, sync roles, bandwidth) -- those are supplied by Strategy
+//   objects and the BandwidthCoordinator. It only knows how to *do* things to
+//   one device and how to clean itself up.
+//
+// Why a class:
+//   In the old code the raw shared_ptr<...> was passed everywhere and every
+//   call site re-implemented "is it open? is it grabbing? stop/close/detach".
+//   Centralising that here means there is exactly one correct teardown path
+//   (the destructor) and one place that knows the Pylon node quirks.
+//
+#include <memory>
+#include <string>
+#include <pylon/PylonIncludes.h>                 // CImageFormatConverter, CPylonImage, etc.
+#include <pylon/BaslerUniversalInstantCamera.h>
+#include <opencv2/core.hpp>
+
+class CameraDevice {
+public:
+    using PylonCamera = Pylon::CBaslerUniversalInstantCamera;
+
+    // Takes ownership of an already-created Pylon device pointer (Attach with
+    // Cleanup_Delete). Does NOT open it -- call open() explicitly so callers
+    // control when network I/O happens.
+    explicit CameraDevice(Pylon::IPylonDevice* device, std::string serial);
+    ~CameraDevice();                       // guarantees full release
+
+    CameraDevice(const CameraDevice&)            = delete;
+    CameraDevice& operator=(const CameraDevice&) = delete;
+    CameraDevice(CameraDevice&&)                 = delete;
+    CameraDevice& operator=(CameraDevice&&)      = delete;
+
+    // ---- Lifecycle ----
+    bool open();                           // open + apply heartbeat hardening
+    void close() noexcept;                 // stop grab + close, keep device
+    bool isOpen()     const;
+    bool isGrabbing() const;
+
+    bool startGrabbing();                  // LatestImageOnly strategy
+    void stopGrabbing() noexcept;
+
+    // Outcome of a single retrieve, so the caller can react proportionately:
+    // a transient Timeout/BadFrame need not trigger a full reconnect, while
+    // DeviceError (Pylon exception / connection loss) should.
+    enum class GrabStatus { Ok, Timeout, BadFrame, DeviceError };
+
+    // Retrieve one frame as BGR8. 'isColor' reports whether the source pixel
+    // format was color (true) or Mono8 (false). Never throws -- all OpenCV and
+    // Pylon exceptions are caught and mapped to GrabStatus::DeviceError.
+    GrabStatus retrieveBGR(cv::Mat& out, bool& isColor, unsigned timeoutMs = 1000);
+
+    // ---- Identity / introspection ----
+    const std::string& serial() const { return serial_; }
+    std::string        deviceId() const;     // GigE IP/MAC -- NOT an identity key
+    std::string        subnet()   const;     // best-effort NIC group label
+    bool               isColorModel();       // PixelFormat != Mono8
+
+    // Raw access for Strategy objects / configurators that need node-level
+    // control. Returns nullptr if the device was never constructed.
+    PylonCamera* raw() { return cam_.get(); }
+
+private:
+    void hardRelease() noexcept;           // stop/close/detach/destroy, no throw
+
+    std::string                  serial_;
+    std::shared_ptr<PylonCamera> cam_;
+    Pylon::CImageFormatConverter converter_;
+};

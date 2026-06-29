@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "client-deep-lpr",
+  "version": "0.1.0",
+  "description": "Clean LPR client. OpenCV via vcpkg. VLC is NOT in vcpkg (install the VideoLAN SDK separately). GStreamer/Pylon/OpenVINO/NATS are installed separately and detected by CMake.",
+  "dependencies": [ { "name": "opencv4", "features": [ "ffmpeg" ] }, "nlohmann-json", "eigen3" ],
+  "features": {
+    "openvino": {
+      "description": "OpenVINO inference backend pulled via vcpkg (CPU + IR frontend). Builds from source -> slow on the first configure. Enable with -DVCPKG_MANIFEST_FEATURES=openvino -DWITH_OPENVINO=ON (or use the full-vcpkg-all preset). If you already have the OpenVINO runtime installed, prefer the full-vcpkg-ov preset instead (no source build).",
+      "dependencies": [
+        { "name": "openvino", "default-features": false, "features": [ "cpu", "ir" ] }
+      ]
+    },
+    "gstreamer": {
+      "description": "Build the GStreamer RTSP backend (heavy; or install GStreamer system dev packages instead)",
+      "dependencies": [ "gstreamer" ]
+    },
+    "nats": {
+      "description": "NATS messaging transport (cnats C client). Enable with -DVCPKG_MANIFEST_FEATURES=nats -DWITH_NATS=ON",
+      "dependencies": [ "cnats" ]
+    }
+  }
+}

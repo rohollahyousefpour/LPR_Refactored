@@ -1,0 +1,8 @@
+if(TARGET lpr_net)
+  add_executable(test_messaging test_messaging.cpp)
+  target_link_libraries(test_messaging PRIVATE lpr_net)
+  if(TARGET lpr_services)
+    target_link_libraries(test_messaging PRIVATE lpr_services)
+  endif()
+  add_test(NAME messaging COMMAND test_messaging)
+endif()
