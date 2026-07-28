@@ -55,6 +55,11 @@ BaslerCamera::BaslerCamera(int x, int y, int w, int h, std::string gate)
         triggerOn_    = s.getCameraSettingByIdAndKey<int>(cameraId_, "trigger_mode").value_or(0);
         autoExposure_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "continuous_exposure").value_or(1) != 0;
         rgbPfs_       = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "CamconfigFile").value_or("");
+        // Mono/IR plate camera feature file. Settings-driven and OPTIONAL: default empty
+        // means "no pfs" (configure() skips the load, exactly like the RGB path). This
+        // avoids aborting the mono master on a missing file, which would otherwise take
+        // down its whole stereo pair.
+        monoPfs_      = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "MonoCamconfigFile").value_or("");
         // Auto-exposure target brightness (0..255) for the single/RGB camera. LOWER it for
         // retroreflective plates that wash out: a high target meters the (darker) whole scene
         // and over-exposes the bright plate. ~40-70 exposes for the plate, letting the
@@ -78,7 +83,6 @@ BaslerCamera::BaslerCamera(int x, int y, int w, int h, std::string gate)
     }
     catch (const std::exception& e) { AppLogger::LogException(e, "BaslerCamera ctor settings"); }
     catch (...) { AppLogger::LogUnknownException("BaslerCamera ctor settings"); }
-    monoPfs_ = "acA_cam_mono.pfs";
 
     // Output chain: capture -> [StereoRectifySink] -> LegacySendSink -> signals.
     auto legacy = std::make_unique<LegacySendSink>(this);

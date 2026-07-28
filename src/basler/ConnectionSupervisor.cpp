@@ -9,6 +9,7 @@
 #include <opencv2/core.hpp>
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
 
 namespace UCP = Basler_UniversalCameraParams;
 
@@ -75,10 +76,19 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
 
     try {
         // 1) Optional feature file FIRST (gives the full per-camera feature set).
+        //    Guard on existence: a configured-but-missing pfs must NOT abort configure()
+        //    (that would skip bandwidth/sync and, for a mono master, take down its pair).
+        //    Warn and continue instead.
         if (!prof.pfsFile.empty()) {
-            Pylon::CFeaturePersistence::Load(prof.pfsFile.c_str(),
-                                             &device->raw()->GetNodeMap(), true);
-            LOGI() << "[supervisor] loaded pfs " << prof.pfsFile << " for " << serial;
+            std::error_code ec;
+            if (!std::filesystem::exists(prof.pfsFile, ec) || ec) {
+                LOGW() << "[supervisor] pfs '" << prof.pfsFile << "' not found for "
+                       << serial << " -- skipping feature-file load";
+            } else {
+                Pylon::CFeaturePersistence::Load(prof.pfsFile.c_str(),
+                                                 &device->raw()->GetNodeMap(), true);
+                LOGI() << "[supervisor] loaded pfs " << prof.pfsFile << " for " << serial;
+            }
         }
 
         // 2) ROI, bandwidth, then sync role (role wins on trigger/line nodes).
