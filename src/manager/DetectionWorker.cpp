@@ -46,13 +46,62 @@ void DetectionWorker::run() {
     while (running_) {
         auto item = input_->popFor(std::chrono::milliseconds(cfg_.popTimeoutMs));
         if (!item) {
+            releasePending(nowSteadyMs());                      // age out held plates during a lull
             if (input_->isClosed() && input_->empty()) break;   // drained + closed -> exit
             continue;                                           // timeout -> re-check running_
         }
         process(*item);
     }
+    flushPending();   // send anything still held so a plate isn't lost on shutdown
     LOGI() << "DetectionWorker: stopped (frames=" << framesProcessed_
            << ", plates=" << platesEmitted_ << ")";
+}
+
+long DetectionWorker::nowSteadyMs() {
+    return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// Standing enter/exit for a plate: the estimator's committed physical trend mapped through the
+// per-camera Entry_Exit polarity. 0 = unknown/undecided, 1 = enter, 2 = exit.
+int DetectionWorker::directionFor(const std::string& gate, const std::string& text) {
+    const int trend = dir_.current(gate + ":" + text);
+    if (trend == DirectionEstimator::Unknown) return 0;
+    const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(gate) : true;
+    if (trend == DirectionEstimator::Approaching) return approachEnter ? 1 : 2;
+    return approachEnter ? 2 : 1;   // Receding
+}
+
+void DetectionWorker::emitPlate(PlateItem&& out) {
+    ++platesEmitted_;
+    if (sink_) sink_(std::move(out));
+}
+
+// Send held plates whose direction has since committed, or that have waited past directionHoldMs
+// (sent with whatever is known -- still 0/unknown for a plate seen too few times to decide).
+void DetectionWorker::releasePending(long nowMs) {
+    for (auto it = pending_.begin(); it != pending_.end();) {
+        const int  dir  = directionFor(it->gate, it->item.plate.text);
+        const bool aged = cfg_.directionHoldMs <= 0 || (nowMs - it->bufferedMs) >= cfg_.directionHoldMs;
+        if (dir != 0 || aged) {
+            if (it->item.plate.direction == 0 && dir != 0) it->item.plate.direction = dir;
+            if (it->item.plate.direction == 0)
+                LOGD() << "DetectionWorker[" << it->gate << "]: " << it->item.plate.text
+                       << " sent with UNKNOWN direction (hold window elapsed, too few sightings)";
+            emitPlate(std::move(it->item));
+            it = pending_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void DetectionWorker::flushPending() {
+    for (auto& pp : pending_) {
+        if (pp.item.plate.direction == 0) pp.item.plate.direction = directionFor(pp.gate, pp.item.plate.text);
+        emitPlate(std::move(pp.item));
+    }
+    pending_.clear();
 }
 
 void DetectionWorker::process(FrameItem& item) {
@@ -214,10 +263,9 @@ void DetectionWorker::process(FrameItem& item) {
     // Infer enter/exit from how the plate's apparent size changes across sightings (low,
     // plate-facing camera). Feed every raw detection once per frame; tag emitted plates with
     // the committed direction. Uses a steady-clock ms timestamp so gap/cooldown are wall-time.
+    const long nowMs = nowSteadyMs();
     std::map<std::string, int> dirByText;
     if (cfg_.directionEnable && !results.empty()) {
-        const long nowMs = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
         // Per-camera polarity: does a plate approaching the camera mean ENTER? (Entry_Exit=0)
         const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(item.gate) : true;
         for (const PlateResult& r : results) {
@@ -252,13 +300,28 @@ void DetectionWorker::process(FrameItem& item) {
         out.plate     = std::move(*kept);
         out.gate      = item.gate;
         out.timestamp = item.timestamp;
-        if (out.plate.direction == 0) {
-            auto dit = dirByText.find(out.plate.text);
-            if (dit != dirByText.end()) out.plate.direction = dit->second;
+
+        // The processor emits a pass on its FIRST read, but the enter/exit decision needs several
+        // sightings (DirectionEstimator). Rather than send straight away with direction=0 (which a
+        // panel renders as EXIT for every car), hold the plate until the direction commits or the
+        // hold window elapses -- then the sent message carries the real ENTER/EXIT. The estimator
+        // keeps being fed by the direction loop above while the plate waits, so it decides within a
+        // few frames. Holding is skipped when the feature/window is off (send now, as before).
+        if (out.plate.direction == 0 && cfg_.directionEnable && cfg_.directionHoldMs > 0) {
+            const int dir = directionFor(item.gate, out.plate.text);
+            if (dir != 0) { out.plate.direction = dir; emitPlate(std::move(out)); }
+            else          { pending_.push_back({std::move(out), item.gate, nowMs}); }
+        } else {
+            if (out.plate.direction == 0) {
+                auto dit = dirByText.find(out.plate.text);
+                if (dit != dirByText.end()) out.plate.direction = dit->second;
+            }
+            emitPlate(std::move(out));
         }
-        ++platesEmitted_;
-        if (sink_) sink_(std::move(out));
     }
+
+    // Release held plates whose direction has since committed, or that have waited long enough.
+    releasePending(nowMs);
 }
 
 } // namespace lpr

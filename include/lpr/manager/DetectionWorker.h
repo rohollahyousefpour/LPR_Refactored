@@ -26,6 +26,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -58,6 +59,11 @@ public:
         // Per-camera Entry_Exit polarity: true => a plate approaching the camera means ENTER
         // (Entry_Exit=0); false => approaching means EXIT (Entry_Exit=1). Null => treat as true.
         std::function<bool(const std::string& gate)> approachingIsEnter;
+        // The processor emits a pass on its FIRST read, but the enter/exit decision needs several
+        // sightings. Hold an emitted plate up to this long, waiting for its direction to be
+        // decided, before sending it anyway (so the message carries a real ENTER/EXIT rather than
+        // 0/unknown). 0 disables holding: send immediately, direction stays 0 as before.
+        long directionHoldMs = 1500;
     };
 
     DetectionWorker(std::shared_ptr<FrameQueue> input, IPlateRecognizer& recognizer, Config cfg);
@@ -87,6 +93,18 @@ public:
 private:
     void run();
     void process(FrameItem& item);
+
+    // Direction delivery (hold-until-decided). All touched only on the worker thread.
+    static long nowSteadyMs();
+    int  directionFor(const std::string& gate, const std::string& text);  // trend+polarity -> 0/1/2
+    void emitPlate(PlateItem&& out);          // sink + platesEmitted_ counter
+    void releasePending(long nowMs);          // send held plates that are decided or aged out
+    void flushPending();                      // send everything still held (shutdown)
+
+    // Plates emitted by the processor but held until their enter/exit direction is decided
+    // (or Config::directionHoldMs elapses). bufferedMs is a steady-clock ms stamp.
+    struct PendingPlate { PlateItem item; std::string gate; long bufferedMs; };
+    std::vector<PendingPlate> pending_;
 
     std::shared_ptr<FrameQueue>  input_;
     IPlateRecognizer&            recognizer_;
