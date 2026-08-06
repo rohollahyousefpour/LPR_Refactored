@@ -12,6 +12,7 @@
 #include "lpr/Log.h"
 #include <nlohmann/json.hpp>
 #include <atomic>
+#include <cerrno>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -59,6 +60,48 @@ std::string exeDir() {
 #endif
     } catch (...) {}
     return ".";
+}
+
+// Full path to this executable (for a self re-exec on the restart command).
+std::string exePath() {
+    try {
+#ifdef _WIN32
+        char buf[MAX_PATH];
+        DWORD n = ::GetModuleFileNameA(nullptr, buf, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) return std::string(buf, n);
+#else
+        char buf[PATH_MAX];
+        ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (n > 0) { buf[n] = '\0'; return std::string(buf); }
+#endif
+    } catch (...) {}
+    return "";
+}
+
+// Restart THIS process with the same arguments — the C++ side of the "restart the LPR"
+// API. Called only after the pipeline has been stopped (app.stop()) so NATS subs, cameras
+// and workers are already torn down. On success this never returns (POSIX execv) / exits
+// (Windows). On failure it returns and main() falls through to a normal exit, letting an
+// external supervisor (systemd/NSSM/docker restart:always) bring the reader back instead.
+void relaunchSelf(char** argv) {
+    const std::string path = exePath();
+    if (path.empty()) { LOGE() << "lpr: cannot resolve exe path for restart"; return; }
+    LOGW() << "lpr: re-launching '" << path << "'";
+#ifdef _WIN32
+    STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
+    PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
+    // Reuse the exact original command line so all flags/paths carry over.
+    std::string cmdline = ::GetCommandLineA();
+    if (::CreateProcessA(path.c_str(), cmdline.data(), nullptr, nullptr, FALSE,
+                         0, nullptr, nullptr, &si, &pi)) {
+        ::CloseHandle(pi.hProcess); ::CloseHandle(pi.hThread);
+        std::exit(0);                          // parent exits; the fresh process took over
+    }
+    LOGE() << "lpr: CreateProcess failed (" << ::GetLastError() << "); not restarting";
+#else
+    ::execv(path.c_str(), argv);               // replaces the image on success
+    LOGE() << "lpr: execv failed (" << errno << "); not restarting";
+#endif
 }
 } // namespace
 
@@ -124,9 +167,17 @@ int main(int argc, char** argv) {
     Application app(std::move(opts));
 
     std::atomic<bool> running{true};
+    std::atomic<bool> restartRequested{false};
     g_running = &running;
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+
+    // Backend "restart the LPR" command (reset_lpr on command.<clientId>): end the run
+    // loop and remember that this was a restart, not a shutdown, so we re-exec below.
+    app.setRestartHandler([&running, &restartRequested] {
+        restartRequested = true;
+        running = false;
+    });
 
     if (!settingsFile.empty()) {
         // Offline: load settings JSON and bootstrap directly.
@@ -148,5 +199,10 @@ int main(int argc, char** argv) {
 
     LOGI() << "lpr: shutting down";
     app.stop();
+
+    // A reset_lpr command asked for a restart: the pipeline is now stopped, so relaunch
+    // this process with the same arguments. relaunchSelf doesn't return on success.
+    if (restartRequested) relaunchSelf(argv);
+
     return 0;
 }

@@ -36,6 +36,7 @@
 
 #include <nlohmann/json.hpp>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -80,6 +81,16 @@ public:
     void bootstrapFromJson(const nlohmann::json& settingsBody);  // offline / direct bootstrap
     void run();                                     // block until stop()
     void stop();
+
+    // Restart hook. The backend sends a `reset_lpr` command on `command.<clientId>`
+    // (see NatsHandle::publish_command in the Rust backend); onCommand acknowledges it
+    // and then invokes this handler. main() wires it to a graceful stop + self re-exec,
+    // so the whole reader process restarts on demand — the C++ side of the
+    // "restart the LPR" API (backend/front/C++). The handler must only flip flags and
+    // return quickly (it runs on the NATS callback thread); the real re-launch happens
+    // on the main thread after the command ack has been published.
+    using RestartHandler = std::function<void()>;
+    void setRestartHandler(RestartHandler h) { onRestart_ = std::move(h); }
 
     IMessageTransport* transport() { return transport_.get(); }
 
@@ -140,6 +151,7 @@ private:
     std::mutex        bootMtx_;
     std::atomic<bool> booted_{false};
     std::atomic<bool> running_{false};
+    RestartHandler    onRestart_;                    // set by main(); fired on a reset_lpr command
 };
 
 } // namespace lpr

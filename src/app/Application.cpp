@@ -116,11 +116,22 @@ void Application::onCommand(const std::string& payload) {
         LOGI() << "Application: <<< command received command_type='" << ct << "'";
         if (ct.empty())
             LOGI() << "Application: raw command payload=" << payload;
+        // A restart request from the backend (`reset_lpr`). We must NOT tear the process
+        // down inside the callback: first fall through and publish the success ack below,
+        // THEN fire the restart handler so the backend sees the acknowledgment before the
+        // reader exits and re-launches.
+        bool restartAfterAck = false;
         if (router_) {
             if      (ct == "recording")  { LOGI() << "Application: -> startRecording"; router_->startRecording(cmd); }
             else if (ct == "streaming")  { LOGI() << "Application: -> liveView";       router_->liveView(cmd); }
             else if (ct == "set_config") { LOGI() << "Application: -> setCameraConfig"; router_->setCameraConfig(cmd); }
             else if (ct == "lpr_settings") { LOGI() << "Application: -> requestSettings"; requestSettings(); }
+            else if (ct == "reset_lpr" || ct == "restart" || ct == "reset") {
+                // Backend-initiated restart of the whole reader (the "restart the LPR"
+                // API). Defer the actual re-launch until after the ack is published.
+                LOGW() << "Application: -> reset_lpr (restart requested by backend)";
+                restartAfterAck = true;
+            }
             else if (ct == "screenshot" || ct == "get_screenshot" || ct == "camera_screenshot") {
                 const json* idN = findAnyKeyDeep(cmd, {"camera_id", "cameraId", "gate_id", "gate", "id"});
                 if (!idN) { LOGW() << "Application: screenshot command needs camera_id"; }
@@ -188,6 +199,14 @@ void Application::onCommand(const std::string& payload) {
         json resp = {{"status", "success"}, {"command_type", ct}};
         LOGI() << "Application: >>> command response to 'response." << clientId_ << "'";
         transport_->publish("response." + clientId_, resp.dump());
+
+        // The ack is out — now honour a restart request. onRestart_ only flips flags on
+        // the main thread (which then stops the pipeline and re-execs the process).
+        if (restartAfterAck) {
+            LOGW() << "Application: restart handler firing after ack";
+            if (onRestart_) onRestart_();
+            else LOGW() << "Application: reset_lpr received but no restart handler set";
+        }
     } catch (const std::exception& e) {
         LOGE() << "Application: bad command: " << e.what();
     }
@@ -521,7 +540,11 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         dwcfg.direction.cooldownMs     = (long)sm.getLpr<int>("direction_cooldown_sec").value_or(8) * 1000;
         dwcfg.direction.trackGapMs     = (long)sm.getLpr<int>("direction_gap_sec").value_or(3) * 1000;
         dwcfg.direction.requireYAgree  = (sm.getLpr<int>("direction_require_y").value_or(0) == 1);
-        // Per-camera Entry_Exit: 0 => approaching the camera = ENTER; 1 => approaching = EXIT.
+        // How long to hold a plate waiting for its enter/exit decision before sending it anyway.
+        // The processor emits a pass on its first read, but the decision needs several sightings;
+        // holding lets the sent message carry a real ENTER/EXIT instead of 0/unknown. 0 = send
+        // immediately (old behaviour). Default 1500ms (~ one pass) is plenty at normal fps.
+        dwcfg.directionHoldMs          = (long)sm.getLpr<int>("direction_hold_ms").value_or(1500);
         dwcfg.approachingIsEnter = [](const std::string& gate) -> bool {
             try {
                 return SettingsManager::instance()
@@ -531,7 +554,8 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         };
         if (dwcfg.directionEnable)
             LOGI() << "Application: direction (enter/exit) ON minSightings=" << dwcfg.direction.minSightings
-                   << " growth=" << dwcfg.direction.minGrowthRatio;
+                   << " growth=" << dwcfg.direction.minGrowthRatio
+                   << " holdMs=" << dwcfg.directionHoldMs;
     }
     if (dwcfg.showLive) LOGI() << "Application: show_live enabled (preview window per camera, scale=" << dwcfg.liveScale << ")";
     worker_ = std::make_unique<DetectionWorker>(frames_, *topRecognizer_, dwcfg);
