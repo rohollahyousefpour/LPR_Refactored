@@ -347,15 +347,22 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev) {
         if (c->GevStreamChannelSelector.IsWritable())
             c->GevStreamChannelSelector.SetValue(UCP::GevStreamChannelSelector_StreamChannel0);
 
-        // 2) Packet size: no jumbo on this switch => MTU 1500 (use the largest the
-        //    network allows; here that is 1500).
+        // 2) Packet size (GevSCPSPacketSize): bigger packets mean far fewer packets per frame,
+        //    which is the single biggest fix for incomplete-frame (BadFrame / status=2) drops on
+        //    multi-camera GigE. Default 8960 (jumbo). Settings key 'gige_packet_size'.
+        //    IMPORTANT: jumbo REQUIRES it enabled end-to-end -- the NIC MTU must be >= 9000 and the
+        //    switch must pass jumbo frames. If it isn't, oversized packets are dropped and EVERY
+        //    frame fails, so set gige_packet_size back to 1500 for a non-jumbo network. The value
+        //    is clamped to the camera's own supported min/max, and the byte math below uses the
+        //    ACTUAL applied size (read back), so the bandwidth throttle stays correct either way.
+        const int64_t wantPkt = SettingsManager::instance().getLpr<int>("gige_packet_size").value_or(1500);
         if (c->GevSCPSPacketSize.IsWritable()) {
-            const int64_t pkt = std::clamp<int64_t>(cfg.mtuBytes,
+            const int64_t pkt = std::clamp<int64_t>(wantPkt,
                 c->GevSCPSPacketSize.GetMin(), c->GevSCPSPacketSize.GetMax());
             c->GevSCPSPacketSize.SetValue(pkt);
         }
         const int64_t pktApplied =
-            c->GevSCPSPacketSize.IsReadable() ? c->GevSCPSPacketSize.GetValue() : cfg.mtuBytes;
+            c->GevSCPSPacketSize.IsReadable() ? c->GevSCPSPacketSize.GetValue() : wantPkt;
         const int64_t slotBytes = pktApplied + cfg.packetOverhead;
 
         // Tick frequency + usable link rate drive the *time-correct* delays below.
@@ -363,7 +370,27 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev) {
         // to ticks via GevTimestampTickFrequency. (DeviceLinkThroughputLimit isn't
         // used: this camera doesn't support it.)
         SettingsManager& sm = SettingsManager::instance();
-        const double linkBytesPerSec = sm.getLpr<int>("gige_link_mbytes_per_sec").value_or(90) * 1e6;
+        // Usable shared-link bandwidth (bytes/sec) that all N cameras must fit under. Prefer the
+        // camera's ACTUAL negotiated GigE link speed (GevLinkSpeed, in Mbps) instead of assuming a
+        // full gigabit -- so a port that fell back to 100 Mbps is throttled correctly and stops
+        // dropping packets (the incomplete-frame / status=2 problem). Manual override: set LPR
+        // 'gige_link_mbytes_per_sec' > 0 to force a value (e.g. when the HOST uplink, not the
+        // camera's own link, is the real bottleneck). 0 or absent => auto-detect.
+        double linkBytesPerSec;
+        const int manualLinkMBps = sm.getLpr<int>("gige_link_mbytes_per_sec").value_or(0);
+        if (manualLinkMBps > 0) {
+            linkBytesPerSec = (double)manualLinkMBps * 1e6;
+            LOGI() << "[supervisor][bw][" << serial << "] link=manual " << manualLinkMBps << " MB/s";
+        } else {
+            int64_t linkMbps = c->GevLinkSpeed.IsReadable() ? c->GevLinkSpeed.GetValue() : 0;
+            if (linkMbps <= 0) linkMbps = 1000;   // fallback: assume gigabit if the node is unreadable
+            // ~72% of the raw line rate is realistically usable for image payload (GigE Vision
+            // overhead + inter-packet gaps): 1000 Mbps -> ~90 MB/s (matches the old fixed default),
+            // 100 Mbps -> ~9 MB/s.
+            linkBytesPerSec = (double)linkMbps * 1e6 / 8.0 * 0.72;
+            LOGI() << "[supervisor][bw][" << serial << "] link=auto GevLinkSpeed=" << linkMbps
+                   << " Mbps -> usable " << (int64_t)(linkBytesPerSec / 1e6) << " MB/s";
+        }
         const double tickHz = c->GevTimestampTickFrequency.IsReadable()
                             ? (double)c->GevTimestampTickFrequency.GetValue() : 0.0;
         const int64_t scpdFloor = sm.getLpr<int>("gige_scpd_floor").value_or(2000);
