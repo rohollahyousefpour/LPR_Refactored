@@ -28,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -64,6 +65,10 @@ public:
         // decided, before sending it anyway (so the message carries a real ENTER/EXIT rather than
         // 0/unknown). 0 disables holding: send immediately, direction stays 0 as before.
         long directionHoldMs = 1500;
+        // A quiet gap (ms) longer than this ends a vehicle pass; the same plate seen
+        // again after it starts a NEW pass with a fresh passId. Mirrors the backend's
+        // pass-correlation window intent (kept small so distinct passes never merge).
+        long passGapMs = 5000;
     };
 
     DetectionWorker(std::shared_ptr<FrameQueue> input, IPlateRecognizer& recognizer, Config cfg);
@@ -96,7 +101,9 @@ private:
 
     // Direction delivery (hold-until-decided). All touched only on the worker thread.
     static long nowSteadyMs();
-    int  directionFor(const std::string& gate, const std::string& text);  // trend+polarity -> 0/1/2
+    int  directionFor(const std::string& gate, const std::string& text);  // trend+polarity -> 0/1/2 (legacy)
+    int  physicalDirection(const std::string& gate, const std::string& text); // trend only -> 0/1/2
+    std::string passIdFor(const std::string& gate, const std::string& text, long nowMs);
     void emitPlate(PlateItem&& out);          // sink + platesEmitted_ counter
     void releasePending(long nowMs);          // send held plates that are decided or aged out
     void flushPending();                      // send everything still held (shutdown)
@@ -105,6 +112,12 @@ private:
     // (or Config::directionHoldMs elapses). bufferedMs is a steady-clock ms stamp.
     struct PendingPlate { PlateItem item; std::string gate; long bufferedMs; };
     std::vector<PendingPlate> pending_;
+
+    // Per-pass state (key = gate + ":" + plate text) for early-announce + correction:
+    // a stable passId reused across the pass, whether the early event fired, and the
+    // last physical direction sent (to avoid re-sending an unchanged direction).
+    struct PassState { std::string passId; long lastSeenMs = 0; bool emittedEarly = false; int lastSentDir = -1; };
+    std::unordered_map<std::string, PassState> passes_;
 
     std::shared_ptr<FrameQueue>  input_;
     IPlateRecognizer&            recognizer_;

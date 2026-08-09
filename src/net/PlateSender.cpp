@@ -75,7 +75,9 @@ std::string PlateSender::buildMessage(const PlateItem& item) const {
             {"suffix_2", nullptr},
             {"is_valid", cfg_.validator ? cfg_.validator(p.text) : true},
             {"city_code", 0},
-            {"track_id", p.trackId}}},
+            // Prefer the per-pass UUID (stable across the early + correction events);
+            // fall back to the numeric tracking id when no passId was set.
+            {"track_id", p.passId.empty() ? json(p.trackId) : json(p.passId)}}},
         {"ocr_accuracy", p.confidence},
         {"vehicle_class", {{"class", nullptr}, {"conf", 0}}},
         {"vehicle_type",  {{"class", nullptr}, {"conf", 0}}},
@@ -113,7 +115,9 @@ void PlateSender::run() {
         if (!item) break;
         const std::string& plate = item->plate.text;
         if (plate.empty()) continue;
-        if (!cooldownPasses(item->gate, plate, nowMs())) {
+        // A correction of an already-announced pass (forceSend) must bypass the
+        // per-plate cooldown; otherwise the second (corrected) send is suppressed.
+        if (!item->forceSend && !cooldownPasses(item->gate, plate, nowMs())) {
             LOGD() << "PlateSender: cooldown skip " << item->gate << ":" << plate;
             continue;
         }

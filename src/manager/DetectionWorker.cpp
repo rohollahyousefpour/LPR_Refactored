@@ -2,6 +2,7 @@
 #include "lpr/Log.h"
 #include "lpr/manager/LiveOverlay.h"
 #include "lpr/util/Time.h"
+#include "lpr/util/Uuid.h"
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -70,6 +71,33 @@ int DetectionWorker::directionFor(const std::string& gate, const std::string& te
     const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(gate) : true;
     if (trend == DirectionEstimator::Approaching) return approachEnter ? 1 : 2;
     return approachEnter ? 2 : 1;   // Receding
+}
+
+// PHYSICAL size-trend only (no per-camera polarity): 0 unknown, 1 approaching
+// (plate growing), 2 receding (shrinking). The backend maps this to entry/exit.
+int DetectionWorker::physicalDirection(const std::string& gate, const std::string& text) {
+    const int trend = dir_.current(gate + ":" + text);
+    if (trend == DirectionEstimator::Approaching) return 1;
+    if (trend == DirectionEstimator::Receding)   return 2;
+    return 0;
+}
+
+// A stable per-pass UUID keyed by gate+plate. A quiet gap longer than passGapMs (or
+// a first sighting) starts a new pass with a fresh id. No vehicle-tracking model is
+// needed — this is just "the same plate across a few consecutive frames".
+std::string DetectionWorker::passIdFor(const std::string& gate, const std::string& text, long nowMs) {
+    // Prune passes not seen for over 5 minutes so the map can't grow unbounded.
+    for (auto it = passes_.begin(); it != passes_.end();) {
+        if (nowMs - it->second.lastSeenMs > 5L * 60 * 1000) it = passes_.erase(it); else ++it;
+    }
+    PassState& st = passes_[gate + ":" + text];
+    if (st.passId.empty() || (nowMs - st.lastSeenMs) > cfg_.passGapMs) {
+        st.passId = generateUuidV4();
+        st.emittedEarly = false;
+        st.lastSentDir = -1;
+    }
+    st.lastSeenMs = nowMs;
+    return st.passId;
 }
 
 void DetectionWorker::emitPlate(PlateItem&& out) {
@@ -301,27 +329,33 @@ void DetectionWorker::process(FrameItem& item) {
         out.gate      = item.gate;
         out.timestamp = item.timestamp;
 
-        // The processor emits a pass on its FIRST read, but the enter/exit decision needs several
-        // sightings (DirectionEstimator). Rather than send straight away with direction=0 (which a
-        // panel renders as EXIT for every car), hold the plate until the direction commits or the
-        // hold window elapses -- then the sent message carries the real ENTER/EXIT. The estimator
-        // keeps being fed by the direction loop above while the plate waits, so it decides within a
-        // few frames. Holding is skipped when the feature/window is off (send now, as before).
-        if (out.plate.direction == 0 && cfg_.directionEnable && cfg_.directionHoldMs > 0) {
-            const int dir = directionFor(item.gate, out.plate.text);
-            if (dir != 0) { out.plate.direction = dir; emitPlate(std::move(out)); }
-            else          { pending_.push_back({std::move(out), item.gate, nowMs}); }
-        } else {
-            if (out.plate.direction == 0) {
-                auto dit = dirByText.find(out.plate.text);
-                if (dit != dirByText.end()) out.plate.direction = dit->second;
-            }
+        // Early-announce + correction, correlated by a stable per-pass id:
+        //   * FIRST sighting of a pass  -> emit immediately so the owner is announced
+        //     ASAP; direction is the best physical trend so far (often 0/unknown yet).
+        //   * later sighting where the physical direction has settled/changed -> emit a
+        //     CORRECTION (same passId, forceSend to bypass the cooldown); the backend
+        //     updates the SAME passage row instead of creating a new one.
+        //   * otherwise (already announced, direction unchanged) -> suppress, no flood.
+        // A pass seen too few times never commits a direction, so it stays 0/unknown
+        // and the backend records it as «نامشخص» (not a wrong exit). The module sends
+        // the PHYSICAL trend only; the backend applies per-camera Entry/Exit polarity.
+        const std::string key = item.gate + ":" + out.plate.text;
+        out.plate.passId = passIdFor(item.gate, out.plate.text, nowMs);
+        const int phys = cfg_.directionEnable ? physicalDirection(item.gate, out.plate.text) : 0;
+        PassState& st = passes_[key];
+        if (!st.emittedEarly) {
+            out.plate.direction = phys;
+            st.emittedEarly = true;
+            st.lastSentDir   = phys;
+            emitPlate(std::move(out));                      // EARLY
+        } else if (phys != 0 && phys != st.lastSentDir) {
+            out.plate.direction = phys;
+            out.forceSend       = true;                     // CORRECTION (bypass cooldown)
+            st.lastSentDir      = phys;
             emitPlate(std::move(out));
         }
+        // else: already announced with the same direction -> nothing to send.
     }
-
-    // Release held plates whose direction has since committed, or that have waited long enough.
-    releasePending(nowMs);
 }
 
 } // namespace lpr

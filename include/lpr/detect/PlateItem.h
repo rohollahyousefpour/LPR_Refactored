@@ -12,6 +12,9 @@ struct PlateItem {
     PlateResult plate;
     std::string gate;
     long        timestamp = 0;
+    // When true, PlateSender skips the per-plate cooldown for this item — used for a
+    // direction-correction of an already-announced pass (same passId).
+    bool        forceSend = false;
 };
 
 using PlateQueue = BlockingQueue<PlateItem>;
