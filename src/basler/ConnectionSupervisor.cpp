@@ -466,6 +466,67 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev) {
                << " scpd=" << scpdFinal << " scftd=" << scftdFinal
                << " bandwidthAssigned=" << bwa << " B/s (sum across cameras must stay < "
                << (int64_t)linkBytesPerSec << " B/s) N=" << num_cam << " idx=" << idx;
+
+        // 7) Frame-rate cap -- the piece the Pylon "optimize bandwidth" wizard does
+        //    automatically, and the reason cameras drop here without it.
+        //    SCPD/SCFTD only stagger/space packets; they do NOT stop the sensor from
+        //    *generating* frames faster than its assigned bandwidth (GevSCBWA) can carry.
+        //    In free-run a 1920x1200 camera runs at its full sensor rate (tens of fps),
+        //    each frame ~PayloadSize bytes -- many times its ~link/N slice. The stream
+        //    channel then overflows, packets are lost, frames return incomplete
+        //    (status=2 BadFrame), and the camera faults + reconnects in a loop
+        //    (exactly the "transient grab miss -> grab failed -> reconnect" pattern).
+        //    Fix: cap AcquisitionFrameRate to what the assigned bandwidth can sustain,
+        //    fps <= GevSCBWA / PayloadSize, scaled by a safety margin. This adapts to
+        //    the ACTUAL link speed (GevSCBWA already reflects the auto-detected
+        //    GevLinkSpeed + SCPD + reserve) and to the live camera count, so on a slow
+        //    or crowded NIC the rate drops instead of the camera going offline.
+        const int64_t payload = c->PayloadSize.IsReadable() ? c->PayloadSize.GetValue() : 0;
+        // Budget = the camera's own assigned bandwidth if the node reports it (already
+        // net of SCPD + reserve); else fall back to the computed link/N share.
+        double budgetBps = (bwa > 0) ? (double)bwa : (linkBytesPerSec / (double)num_cam);
+        const int fpsSafetyPct = std::clamp<int>(sm.getLpr<int>("gige_fps_safety_pct").value_or(85), 10, 100);
+        const int userFpsCap   = sm.getLpr<int>("gige_frame_rate_cap").value_or(0);  // 0 => auto only
+        if (payload > 0 && budgetBps > 0.0) {
+            double capFps = (budgetBps / (double)payload) * ((double)fpsSafetyPct / 100.0);
+            if (userFpsCap > 0) capFps = std::min(capFps, (double)userFpsCap);
+            // Prefer the modern AcquisitionFrameRate node; fall back to the legacy
+            // ...Abs node. Both need AcquisitionFrameRateEnable=true to take effect.
+            bool applied = false; double got = -1.0;
+            try {
+                if (c->AcquisitionFrameRateEnable.IsWritable())
+                    c->AcquisitionFrameRateEnable.SetValue(true);
+                if (c->AcquisitionFrameRate.IsWritable()) {
+                    const double lo = c->AcquisitionFrameRate.GetMin();
+                    const double hi = c->AcquisitionFrameRate.GetMax();
+                    const double v  = std::clamp(capFps, lo, hi);
+                    c->AcquisitionFrameRate.SetValue(v);
+                    got = c->AcquisitionFrameRate.IsReadable() ? c->AcquisitionFrameRate.GetValue() : v;
+                    applied = true;
+                } else if (c->AcquisitionFrameRateAbs.IsWritable()) {
+                    const double lo = c->AcquisitionFrameRateAbs.GetMin();
+                    const double hi = c->AcquisitionFrameRateAbs.GetMax();
+                    const double v  = std::clamp(capFps, lo, hi);
+                    c->AcquisitionFrameRateAbs.SetValue(v);
+                    got = c->AcquisitionFrameRateAbs.IsReadable() ? c->AcquisitionFrameRateAbs.GetValue() : v;
+                    applied = true;
+                }
+            } catch (const Pylon::GenericException& e) {
+                LOGW() << "[supervisor][fps][" << serial << "] frame-rate cap write failed: "
+                       << e.GetDescription();
+            }
+            if (applied)
+                LOGI() << "[supervisor][fps][" << serial << "] cap=" << got << " fps"
+                       << " (budget=" << (int64_t)budgetBps << " B/s / payload=" << payload
+                       << " B, safety=" << fpsSafetyPct << "%"
+                       << (userFpsCap > 0 ? (", userCap=" + std::to_string(userFpsCap)) : std::string())
+                       << ", N=" << num_cam << ")";
+            else
+                LOGW() << "[supervisor][fps][" << serial << "] AcquisitionFrameRate not writable"
+                       << " -- cannot cap rate; camera may overrun its bandwidth slot";
+        } else {
+            LOGW() << "[supervisor][fps][" << serial << "] no PayloadSize/bandwidth -> frame-rate cap skipped";
+        }
     }
     catch (const Pylon::GenericException& e) {
         // Bandwidth tuning is not fatal.
