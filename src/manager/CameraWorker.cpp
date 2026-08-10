@@ -145,9 +145,17 @@ void CameraWorker::onFrame(const cv::Mat& frame, const cv::Mat& mono, long times
     ++framesThisSession_;
     if (!connected_) { connected_ = true; emitStatus(true); }
 
-    // Continuous live view: keep using the primary frame when present (so dashboard overlays line
-    // up with the detection coordinates), else whatever survived.
-    const cv::Mat& liveImg = !frame.empty() ? frame : detectImg;
+    const bool haveSeparateEvidence = !evidenceImg.empty() && evidenceImg.data != detectImg.data;
+
+    // Continuous live view: prefer the COLOR / RGB evidence image when a mono+RGB pair is present,
+    // so the dashboard live feed is color while the mono/IR stream stays dedicated to plate
+    // detection and the plate crop. This makes Basler behave like IP (which already shows the RGB
+    // stream live). Fall back to the detection image for a single camera (no separate evidence).
+    // NOTE: detection overlay boxes are computed in detection-image (mono) coordinates; they line
+    // up on the color live view only when the two streams share the same FOV/resolution (a
+    // co-located / rectified mono+RGB pair). If a deployment's color and mono differ a lot in
+    // framing, the boxes on the live view may be offset (detection itself is unaffected).
+    const cv::Mat& liveImg = haveSeparateEvidence ? evidenceImg : detectImg;
     if (firstFrame_) { firstFrame_ = false; if (firstFrameCb_) firstFrameCb_(gate_, liveImg); }
     if (rawObserver_) {
         FrameItem raw;
@@ -157,7 +165,6 @@ void CameraWorker::onFrame(const cv::Mat& frame, const cv::Mat& mono, long times
         rawObserver_(std::move(raw));
     }
 
-    const bool haveSeparateEvidence = !evidenceImg.empty() && evidenceImg.data != detectImg.data;
     auto forward = [&]() {
         if (!frameSink_) return;
         FrameItem item;
