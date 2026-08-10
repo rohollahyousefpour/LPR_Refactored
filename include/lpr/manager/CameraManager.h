@@ -46,6 +46,11 @@ public:
     void handleCommand(const std::string& cameraId,
                        const std::string& key, const std::string& value);
 
+    // Read the true applied exposure (us) + gain for a sub-camera (by serial) under
+    // the given camera id/gate. False if the camera/serial is not available.
+    bool readExposureGain(const std::string& cameraId, const std::string& serial,
+                          double& exposureUs, double& gain);
+
 private:
     std::vector<std::unique_ptr<CameraWorker>> workers_;
     CameraWorker::FrameSink rawObserver_;

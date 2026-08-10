@@ -274,7 +274,14 @@ void Application::publishManualLive(const FrameItem& f) {
         if (it != manualLive_.end()) vals = it->second.vals;
     }
     auto fill = [&](MediaSender::ManualLiveCam& c) {
-        auto v = vals.find(c.serial);
+        // Prefer the exposure/gain the sensor ACTUALLY holds now (ground truth, post-clamp /
+        // post-increment coercion) so the operator tunes against reality, not the request.
+        double us = 0.0, g = 0.0;
+        if (cameras_ && cameras_->readExposureGain(f.gate, c.serial, us, g)) {
+            c.exposureUs = us; c.gain = g;
+            return;
+        }
+        auto v = vals.find(c.serial);   // fallback: last value the operator requested
         if (v != vals.end()) { c.exposureUs = v->second.exposureUs; c.gain = v->second.gain; }
     };
 

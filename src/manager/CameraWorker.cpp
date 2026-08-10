@@ -22,6 +22,11 @@ void CameraWorker::handleCommand(const std::string& key, const std::string& valu
     if (source_) source_->handleCommand(key, value);
 }
 
+bool CameraWorker::readExposureGain(const std::string& serial, double& exposureUs, double& gain) {
+    std::lock_guard<std::mutex> lk(sourceMtx_);
+    return source_ && source_->readAppliedExposureGain(serial, exposureUs, gain);
+}
+
 void CameraWorker::start() {
     if (running_.exchange(true)) return;
     if (supervisor_.joinable()) supervisor_.join();   // join a previously self-stopped run

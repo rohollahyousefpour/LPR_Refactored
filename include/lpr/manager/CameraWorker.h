@@ -58,6 +58,9 @@ public:
     // Forward a runtime command to the live source (thread-safe).
     void handleCommand(const std::string& key, const std::string& value);
 
+    // Read the exposure (us) + gain a sub-camera (by serial) actually holds now.
+    bool readExposureGain(const std::string& serial, double& exposureUs, double& gain);
+
     void start();
     void stop();
     bool isRunning() const { return running_; }

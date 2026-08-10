@@ -301,3 +301,7 @@ void BaslerCamera::handleCommand(const std::string& key, const json& value) {
     catch (const std::exception& e) { AppLogger::LogException(e, "handleCommand -- " + key); }
     catch (...) { AppLogger::LogUnknownException("handleCommand -- " + key); }
 }
+
+bool BaslerCamera::readAppliedExposureGain(const std::string& serial, double& exposureUs, double& gain) {
+    return supervisor_ && supervisor_->readExposureGain(serial, exposureUs, gain);
+}

@@ -51,6 +51,15 @@ void CameraManager::handleCommand(const std::string& cameraId,
     LOGW() << "CameraManager: command '" << key << "' for unknown camera id '" << cameraId << "'";
 }
 
+bool CameraManager::readExposureGain(const std::string& cameraId, const std::string& serial,
+                                     double& exposureUs, double& gain) {
+    for (auto& w : workers_) {
+        if (w && w->gate() == cameraId)
+            return w->readExposureGain(serial, exposureUs, gain);
+    }
+    return false;
+}
+
 } // namespace lpr
 
 // --- settings-driven construction (bridge to the ported SettingsManager) ---

@@ -37,6 +37,9 @@ public:
     using virtual_cap_url::handleCommand;
     void handleCommand(const std::string& key, const nlohmann::json& value) override;
 
+    // Report the true applied exposure/gain for a sub-camera (mono or RGB) by serial.
+    bool readAppliedExposureGain(const std::string& serial, double& exposureUs, double& gain) override;
+
 private:
     // Build a ConnectionSupervisor::Profile for a serial from settings.
     ConnectionSupervisor::Profile buildProfile(const std::string& serial,

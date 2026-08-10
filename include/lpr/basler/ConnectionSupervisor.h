@@ -57,6 +57,10 @@ public:
     void setManualGain(const std::string& serial, double norm) override;
     void revertToSettings(const std::string& serial) override;
 
+    // Read the exposure (microseconds) + gain the named camera actually holds now,
+    // so the manual-control UI can report ground truth. False if not connected.
+    bool readExposureGain(const std::string& serial, double& exposureUs, double& gain);
+
     // Capture-thread entry: remove the faulted device, then start a reconnect
     // worker. Removal here (not in the worker) preserves the pointer-safety
     // invariant in CameraContext.

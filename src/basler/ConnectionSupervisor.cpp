@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 
 namespace UCP = Basler_UniversalCameraParams;
 
@@ -198,12 +199,20 @@ void ConnectionSupervisor::setManualExposure(const std::string& serial, double n
     }
     // value <= 1.0 => normalized fraction of the range; value > 1.0 => absolute
     // microseconds (the backend sends real exposure times, which are large).
-    if (norm > 1.0) ManualExposureStrategy::setExposureUs(*dit->second, norm, cap);
-    else            ManualExposureStrategy::setNormalizedExposure(*dit->second, norm, cap);
+    //   * Normalized: map 0..1 over [min, motion-blur cap] so the slider keeps fine
+    //     resolution in the useful range.
+    //   * Absolute: the operator asked for a specific exposure -- honor it up to the
+    //     sensor's OWN hardware maximum, not the auto motion-blur cap, so manual setup
+    //     (focus / static scene / long-exposure night test) has the full range.
+    if (norm > 1.0)
+        ManualExposureStrategy::setExposureUs(*dit->second, norm, std::numeric_limits<double>::max());
+    else
+        ManualExposureStrategy::setNormalizedExposure(*dit->second, norm, cap);
     ctx_.exposure[serial] = std::make_unique<ManualExposureStrategy>();  // suspend auto loop
     LOGI() << "[exposure][" << serial << "] MANUAL exposure "
            << (norm > 1.0 ? "abs=" : "norm=") << norm
-           << " (cap=" << cap << "us, auto suspended)";
+           << (norm > 1.0 ? " (hardware max, auto suspended)"
+                          : (" (cap=" + std::to_string(cap) + "us, auto suspended)"));
 }
 
 void ConnectionSupervisor::setManualGain(const std::string& serial, double norm) {
@@ -279,6 +288,30 @@ void ConnectionSupervisor::revertToSettings(const std::string& serial) {
 
     LOGI() << "[exposure][" << serial << "] reverted to load-time camera settings"
            << (wasGrabbing ? " (grab stopped/restarted to restore trigger+ROI)" : "");
+}
+
+bool ConnectionSupervisor::readExposureGain(const std::string& serial, double& exposureUs, double& gain) {
+    // Read the exposure (microseconds) and gain the camera ACTUALLY holds right now, so the
+    // manual-control UI can report ground truth (post-clamp / post-increment coercion) instead of
+    // the requested value. Called on the capture thread (from the live-frame path), same thread as
+    // the grab, so node reads don't race. Prefers the modern float nodes (ExposureTime us / Gain dB)
+    // and falls back to the legacy *Raw nodes.
+    std::lock_guard<std::mutex> lk(ctx_.devMutex);
+    auto it = ctx_.devices.find(serial);
+    if (it == ctx_.devices.end() || !it->second) return false;
+    auto* c = it->second->raw();
+    if (!c) return false;
+    try {
+        if      (c->ExposureTime.IsReadable())    exposureUs = c->ExposureTime.GetValue();
+        else if (c->ExposureTimeRaw.IsReadable()) exposureUs = double(c->ExposureTimeRaw.GetValue());
+        else return false;
+        if      (c->Gain.IsReadable())    gain = c->Gain.GetValue();
+        else if (c->GainRaw.IsReadable()) gain = double(c->GainRaw.GetValue());
+        else gain = 0.0;
+        return true;
+    }
+    catch (const Pylon::GenericException&) { return false; }
+    catch (...) { return false; }
 }
 
 void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {

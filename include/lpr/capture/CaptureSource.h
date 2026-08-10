@@ -29,6 +29,12 @@ public:
 
     virtual void handleCommand(const std::string& /*key*/, const std::string& /*value*/) {}
 
+    // Read the exposure (microseconds) + gain a sub-camera actually holds right now, by serial.
+    // Default: unsupported (returns false). Basler overrides it so the manual-control live view can
+    // report the true applied values instead of the requested ones.
+    virtual bool readAppliedExposureGain(const std::string& /*serial*/,
+                                         double& /*exposureUs*/, double& /*gain*/) { return false; }
+
 protected:
     void emitFrame(const cv::Mat& f, const cv::Mat& m, long t) { if (frameCb_) frameCb_(f, m, t); }
     void emitError() { if (errorCb_) errorCb_(); }
