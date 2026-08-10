@@ -138,6 +138,10 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
         // 5) Reset backoff for this serial.
         { std::lock_guard<std::mutex> lk(reconMutex_); attempts_[serial] = 0; }
 
+        // 6) If the operator was mid manual-tuning when the camera dropped, restore the
+        //    manual exposure/gain instead of leaving it on the freshly-built auto strategy.
+        reapplyManualIfAny(serial);
+
         LOGI() << "[supervisor] connected " << serial;
         return true;
     }
@@ -182,7 +186,12 @@ ConnectionSupervisor::makeExposureStrategy(const Profile& prof, CameraDevice& de
 // All three run on the capture thread (command drain). They touch ctx_.exposure
 // and ctx_.devices, which reconnect workers also write, so take devMutex.
 
-void ConnectionSupervisor::setManualExposure(const std::string& serial, double norm) {
+void ConnectionSupervisor::setManualExposure(const std::string& serial, double value, ExposureUnit unit) {
+    // Resolve the unit: an explicit Absolute/Normalized wins; Auto keeps the legacy
+    // heuristic (value > 1.0 is absolute microseconds, else a 0..1 fraction).
+    const bool absolute = (unit == ExposureUnit::Absolute) ||
+                          (unit == ExposureUnit::Auto && value > 1.0);
+
     // Copy the motion-blur cap from the profile first (own lock), then act on the
     // device (own lock) -- never nest, to match openConfigureStore's lock order.
     double cap = 50000.0;
@@ -191,45 +200,69 @@ void ConnectionSupervisor::setManualExposure(const std::string& serial, double n
       if (pit != profiles_.end() && pit->second.exposureLimits.maxExposureUs > 0)
           cap = double(pit->second.exposureLimits.maxExposureUs); }
 
+    // Remember the override so a reconnect re-applies it (cleared by revertToSettings).
+    { std::lock_guard<std::mutex> mk(manualMutex_);
+      auto& m = manual_[serial]; m.hasExp = true; m.exp = value; m.expUnit = unit; }
+
     std::lock_guard<std::mutex> lk(ctx_.devMutex);
     auto dit = ctx_.devices.find(serial);
     if (dit == ctx_.devices.end() || !dit->second) {
         LOGW() << "[exposure][" << serial << "] manual exposure: camera not connected";
         return;
     }
-    // value <= 1.0 => normalized fraction of the range; value > 1.0 => absolute
-    // microseconds (the backend sends real exposure times, which are large).
     //   * Normalized: map 0..1 over [min, motion-blur cap] so the slider keeps fine
     //     resolution in the useful range.
     //   * Absolute: the operator asked for a specific exposure -- honor it up to the
     //     sensor's OWN hardware maximum, not the auto motion-blur cap, so manual setup
     //     (focus / static scene / long-exposure night test) has the full range.
-    if (norm > 1.0)
-        ManualExposureStrategy::setExposureUs(*dit->second, norm, std::numeric_limits<double>::max());
+    if (absolute)
+        ManualExposureStrategy::setExposureUs(*dit->second, value, std::numeric_limits<double>::max());
     else
-        ManualExposureStrategy::setNormalizedExposure(*dit->second, norm, cap);
+        ManualExposureStrategy::setNormalizedExposure(*dit->second, value, cap);
     ctx_.exposure[serial] = std::make_unique<ManualExposureStrategy>();  // suspend auto loop
     LOGI() << "[exposure][" << serial << "] MANUAL exposure "
-           << (norm > 1.0 ? "abs=" : "norm=") << norm
-           << (norm > 1.0 ? " (hardware max, auto suspended)"
-                          : (" (cap=" + std::to_string(cap) + "us, auto suspended)"));
+           << (absolute ? "abs=" : "norm=") << value
+           << (absolute ? " (hardware max, auto suspended)"
+                        : (" (cap=" + std::to_string(cap) + "us, auto suspended)"));
 }
 
-void ConnectionSupervisor::setManualGain(const std::string& serial, double norm) {
+void ConnectionSupervisor::setManualGain(const std::string& serial, double value, ExposureUnit unit) {
+    const bool absolute = (unit == ExposureUnit::Absolute) ||
+                          (unit == ExposureUnit::Auto && value > 1.0);
+
+    { std::lock_guard<std::mutex> mk(manualMutex_);
+      auto& m = manual_[serial]; m.hasGain = true; m.gain = value; m.gainUnit = unit; }
+
     std::lock_guard<std::mutex> lk(ctx_.devMutex);
     auto dit = ctx_.devices.find(serial);
     if (dit == ctx_.devices.end() || !dit->second) {
         LOGW() << "[exposure][" << serial << "] manual gain: camera not connected";
         return;
     }
-    if (norm > 1.0) ManualExposureStrategy::setGainAbs(*dit->second, norm);
-    else            ManualExposureStrategy::setNormalizedGain(*dit->second, norm);
+    if (absolute) ManualExposureStrategy::setGainAbs(*dit->second, value);
+    else          ManualExposureStrategy::setNormalizedGain(*dit->second, value);
     ctx_.exposure[serial] = std::make_unique<ManualExposureStrategy>();  // suspend auto loop
     LOGI() << "[exposure][" << serial << "] MANUAL gain "
-           << (norm > 1.0 ? "abs=" : "norm=") << norm << " (auto suspended)";
+           << (absolute ? "abs=" : "norm=") << value << " (auto suspended)";
+}
+
+void ConnectionSupervisor::reapplyManualIfAny(const std::string& serial) {
+    ManualOverride ov;
+    { std::lock_guard<std::mutex> mk(manualMutex_);
+      auto it = manual_.find(serial);
+      if (it == manual_.end() || (!it->second.hasExp && !it->second.hasGain)) return;
+      ov = it->second; }
+    LOGI() << "[exposure][" << serial << "] re-applying manual override after reconnect";
+    // setManual* re-take their own locks and re-record the (unchanged) override.
+    if (ov.hasExp)  setManualExposure(serial, ov.exp, ov.expUnit);
+    if (ov.hasGain) setManualGain(serial, ov.gain, ov.gainUnit);
 }
 
 void ConnectionSupervisor::revertToSettings(const std::string& serial) {
+    // Ending the manual session: drop any stored override so a later reconnect does
+    // NOT resurrect the manual exposure/gain.
+    { std::lock_guard<std::mutex> mk(manualMutex_); manual_.erase(serial); }
+
     // Copy profile + baseline snapshot first (own lock), then act on the device.
     Profile prof; std::string baseline; bool haveProf = false;
     { std::lock_guard<std::mutex> pk(profMutex_);

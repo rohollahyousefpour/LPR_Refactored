@@ -36,11 +36,22 @@ using CameraResolver = std::function<CameraDevice*(const std::string&)>;
 // Implemented by the ConnectionSupervisor, which owns the per-serial profiles and
 // installed strategies. May be null (e.g. in tests) -- commands then fall back to
 // a direct device write.
+// How to interpret a manual exposure/gain value:
+//   Auto       -- legacy heuristic: value > 1.0 is absolute (microseconds / gain units),
+//                 otherwise a 0..1 fraction of the range.
+//   Absolute   -- the value is in device units (us / gain), honored up to the hardware max.
+//   Normalized -- the value is a 0..1 fraction of the allowed range.
+// The backend can send an explicit "unit" so exposure/gain are never ambiguous (e.g. an
+// absolute gain below 1.0 dB is not mistaken for a 100%-scale fraction).
+enum class ExposureUnit { Auto, Absolute, Normalized };
+
 class IExposureController {
 public:
     virtual ~IExposureController() = default;
-    virtual void setManualExposure(const std::string& serial, double norm) = 0; // [0..1]
-    virtual void setManualGain(const std::string& serial, double norm) = 0;     // [0..1]
+    virtual void setManualExposure(const std::string& serial, double value,
+                                   ExposureUnit unit = ExposureUnit::Auto) = 0;
+    virtual void setManualGain(const std::string& serial, double value,
+                               ExposureUnit unit = ExposureUnit::Auto) = 0;
     virtual void revertToSettings(const std::string& serial) = 0;               // back to auto
 };
 

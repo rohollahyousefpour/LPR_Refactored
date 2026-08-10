@@ -53,8 +53,8 @@ public:
 
     // IExposureController: manual override + restore configured settings. Called
     // on the capture thread (from the command drain).
-    void setManualExposure(const std::string& serial, double norm) override;
-    void setManualGain(const std::string& serial, double norm) override;
+    void setManualExposure(const std::string& serial, double value, ExposureUnit unit) override;
+    void setManualGain(const std::string& serial, double value, ExposureUnit unit) override;
     void revertToSettings(const std::string& serial) override;
 
     // Read the exposure (microseconds) + gain the named camera actually holds now,
@@ -79,12 +79,25 @@ private:
     void startReconnect(const std::string& serial);
     void reconnectLoop(std::string serial);
     int  backoffSeconds(int attempts) const;
+    // Re-apply a live manual-control override (exposure/gain) after a reconnect, so a
+    // camera blip mid-tuning doesn't silently drop back to auto. No-op if the serial
+    // has no active manual override.
+    void reapplyManualIfAny(const std::string& serial);
 
     CameraContext& ctx_;
 
     std::mutex                          profMutex_;
     std::map<std::string, Profile>      profiles_;
     std::map<std::string, std::string>  baseline_;   // serial -> load-time node snapshot (pfs string)
+
+    // Active manual-control overrides, so they survive a reconnect. Cleared by
+    // revertToSettings. exp/gain hold the last requested value + its unit.
+    struct ManualOverride {
+        bool         hasExp = false;  double exp = 0;   ExposureUnit expUnit = ExposureUnit::Auto;
+        bool         hasGain = false; double gain = 0;  ExposureUnit gainUnit = ExposureUnit::Auto;
+    };
+    std::mutex                              manualMutex_;
+    std::map<std::string, ManualOverride>   manual_;
 
     struct Worker {
         std::thread       th;

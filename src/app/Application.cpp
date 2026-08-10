@@ -150,6 +150,7 @@ void Application::onCommand(const std::string& payload) {
                 const json* valN = findAnyKeyDeep(cmd, {"value", "val"});
                 const json* serN = findAnyKeyDeep(cmd, {"camera_serial", "cameraSerial", "serial"});
                 const json* nodeN = findAnyKeyDeep(cmd, {"node", "feature", "param_name"});
+                const json* unitN = findAnyKeyDeep(cmd, {"unit"});
                 if (!idN || !keyN || !keyN->is_string()) {
                     LOGW() << "Application: camera_command needs camera_id + key";
                 } else if (!cameras_) {
@@ -161,6 +162,7 @@ void Application::onCommand(const std::string& payload) {
                     if (valN)  down["value"] = *valN;   // preserve value's JSON type (absent for revert)
                     if (serN)  down["camera_serial"] = serN->is_string() ? serN->get<std::string>() : serN->dump();
                     if (nodeN && nodeN->is_string()) down["node"] = nodeN->get<std::string>();
+                    if (unitN && unitN->is_string()) down["unit"] = unitN->get<std::string>();  // explicit us/norm
                     LOGI() << "Application: -> camera_command id=" << cid << " key='" << key << "'";
                     cameras_->handleCommand(cid, key, down.dump());
 

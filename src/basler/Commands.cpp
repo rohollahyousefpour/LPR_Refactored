@@ -46,23 +46,25 @@ void CommandQueue::clear()       { std::lock_guard<std::mutex> lk(mtx_); q_.clea
 namespace {
 
 struct SetExposureCommand : ICommand {
-    std::string serial; double norm;
-    SetExposureCommand(std::string s, double v) : serial(std::move(s)), norm(v) {}
+    std::string serial; double value; ExposureUnit unit;
+    SetExposureCommand(std::string s, double v, ExposureUnit u = ExposureUnit::Auto)
+        : serial(std::move(s)), value(v), unit(u) {}
     void execute(const CameraResolver& resolve, IExposureController* ctrl) override {
         // Manual control: suspend the camera's auto loop and set the value. The
         // controller swaps in a hold strategy so per-frame auto can't overwrite it.
-        if (ctrl) { ctrl->setManualExposure(serial, norm); return; }
-        if (auto* d = resolve(serial)) ManualExposureStrategy::setNormalizedExposure(*d, norm);
+        if (ctrl) { ctrl->setManualExposure(serial, value, unit); return; }
+        if (auto* d = resolve(serial)) ManualExposureStrategy::setNormalizedExposure(*d, value);
     }
     const char* name() const override { return "ExposureTime"; }
 };
 
 struct SetGainCommand : ICommand {
-    std::string serial; double norm;
-    SetGainCommand(std::string s, double v) : serial(std::move(s)), norm(v) {}
+    std::string serial; double value; ExposureUnit unit;
+    SetGainCommand(std::string s, double v, ExposureUnit u = ExposureUnit::Auto)
+        : serial(std::move(s)), value(v), unit(u) {}
     void execute(const CameraResolver& resolve, IExposureController* ctrl) override {
-        if (ctrl) { ctrl->setManualGain(serial, norm); return; }
-        if (auto* d = resolve(serial)) ManualExposureStrategy::setNormalizedGain(*d, norm);
+        if (ctrl) { ctrl->setManualGain(serial, value, unit); return; }
+        if (auto* d = resolve(serial)) ManualExposureStrategy::setNormalizedGain(*d, value);
     }
     const char* name() const override { return "Gain"; }
 };
@@ -213,12 +215,23 @@ static bool jsonToBool(const json& v, bool dflt = false) {
     return dflt;
 }
 
+// Map an explicit "unit" field to an ExposureUnit. Absent/unknown => Auto (the
+// legacy value>1.0 heuristic), so old backends keep working unchanged.
+static ExposureUnit parseUnit(const json& v) {
+    std::string u = v.value("unit", std::string{});
+    std::transform(u.begin(), u.end(), u.begin(),
+                   [](unsigned char ch) { return (char)std::tolower(ch); });
+    if (u == "us" || u == "abs" || u == "absolute" || u == "microseconds") return ExposureUnit::Absolute;
+    if (u == "norm" || u == "normalized" || u == "pct" || u == "fraction")  return ExposureUnit::Normalized;
+    return ExposureUnit::Auto;
+}
+
 std::unique_ptr<ICommand> makeCommand(const std::string& key, const json& v) {
     const std::string serial = v.value("camera_serial", std::string{});
     if (serial.empty()) { LOGW() << "[command] missing camera_serial for " << key; return nullptr; }
 
-    if (key == "Exposure Time") return std::make_unique<SetExposureCommand>(serial, v.at("value").get<double>());
-    if (key == "Gain")          return std::make_unique<SetGainCommand>(serial, v.at("value").get<double>());
+    if (key == "Exposure Time") return std::make_unique<SetExposureCommand>(serial, v.at("value").get<double>(), parseUnit(v));
+    if (key == "Gain")          return std::make_unique<SetGainCommand>(serial, v.at("value").get<double>(), parseUnit(v));
     if (key == "Trigger Mode")  return std::make_unique<SetTriggerModeCommand>(serial, jsonToBool(v.at("value")));
 
     // Return to the camera's configured (NATS-loaded) settings / auto control.
