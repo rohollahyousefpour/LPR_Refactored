@@ -93,7 +93,7 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
 
         // 2) ROI, bandwidth, then sync role (role wins on trigger/line nodes).
         applyRoi(*device, prof);
-        applyBandwidth(*device);
+        applyBandwidth(*device, prof);
 
         std::shared_ptr<ISyncConfigurator> role =
             prof.freeRun ? std::make_shared<FreeRunConfigurator>()
@@ -317,7 +317,7 @@ void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {
     }
 }
 
-void ConnectionSupervisor::applyBandwidth(CameraDevice& dev) {
+void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof) {
     auto* c = dev.raw(); if (!c) return;
     const std::string serial = dev.serial();
     try {
@@ -481,6 +481,19 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev) {
         //    the ACTUAL link speed (GevSCBWA already reflects the auto-detected
         //    GevLinkSpeed + SCPD + reserve) and to the live camera count, so on a slow
         //    or crowded NIC the rate drops instead of the camera going offline.
+        //
+        //    ONLY for free-running cameras. A triggered slave (config-1: TriggerMode=On)
+        //    captures one frame per external trigger from the master, so AcquisitionFrameRate
+        //    does not govern its rate -- and forcing AcquisitionFrameRateEnable=true can, on
+        //    some models, cap trigger acceptance and DROP synchronized frames. Its bandwidth
+        //    is already bounded because the master's (free-run) rate, which drives the
+        //    trigger, is itself capped here. So skip the cap for a slave. (SCPD/SCFTD/SCBWR
+        //    above still apply -- the slave still needs its packet delay + stagger + reserve.)
+        if (prof.triggerOn) {
+            LOGI() << "[supervisor][fps][" << serial << "] triggered slave -> frame-rate cap"
+                   << " skipped (rate follows master trigger)";
+            return;
+        }
         const int64_t payload = c->PayloadSize.IsReadable() ? c->PayloadSize.GetValue() : 0;
         // Budget = the camera's own assigned bandwidth if the node reports it (already
         // net of SCPD + reserve); else fall back to the computed link/N share.

@@ -66,7 +66,7 @@ public:
 
 private:
     bool openConfigureStore(const std::string& serial);   // the unified path
-    void applyBandwidth(CameraDevice& dev);
+    void applyBandwidth(CameraDevice& dev, const Profile& p);
     void applyRoi(CameraDevice& dev, const Profile& p);
     // Build (and for fixed/camera-native, configure) the exposure strategy for a
     // profile. Shared by the connect path and revertToSettings.
