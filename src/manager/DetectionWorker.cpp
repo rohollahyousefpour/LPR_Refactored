@@ -3,6 +3,7 @@
 #include "lpr/manager/LiveOverlay.h"
 #include "lpr/util/Time.h"
 #include "lpr/util/Uuid.h"
+#include "lpr/util/JaroWinkler.h"
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -82,20 +83,27 @@ int DetectionWorker::physicalDirection(const std::string& gate, const std::strin
     return 0;
 }
 
-// A stable per-pass UUID keyed by gate+plate. A quiet gap longer than passGapMs (or
-// a first sighting) starts a new pass with a fresh id. No vehicle-tracking model is
-// needed — this is just "the same plate across a few consecutive frames".
+// A stable per-pass UUID for "the same vehicle across a few consecutive frames",
+// keyed by GATE (not gate+text) so OCR flicker between the early announce and the
+// settled correction keeps ONE id — otherwise a changed reading would mint a new
+// passId and the backend would insert a duplicate instead of correcting in place.
+// A new pass starts on a quiet gap OR when a clearly different plate appears (so
+// two distinct vehicles are never merged). No vehicle-tracking model is needed.
 std::string DetectionWorker::passIdFor(const std::string& gate, const std::string& text, long nowMs) {
     // Prune passes not seen for over 5 minutes so the map can't grow unbounded.
     for (auto it = passes_.begin(); it != passes_.end();) {
         if (nowMs - it->second.lastSeenMs > 5L * 60 * 1000) it = passes_.erase(it); else ++it;
     }
-    PassState& st = passes_[gate + ":" + text];
-    if (st.passId.empty() || (nowMs - st.lastSeenMs) > cfg_.passGapMs) {
+    PassState& st = passes_[gate];
+    const bool fresh = st.passId.empty() || (nowMs - st.lastSeenMs) > cfg_.passGapMs;
+    const bool differentPlate = !fresh && !st.text.empty() && !text.empty() &&
+        jaroWinklerDistance(st.text, text) < cfg_.passPlateSimilarity;
+    if (fresh || differentPlate) {
         st.passId = generateUuidV4();
         st.emittedEarly = false;
         st.lastSentDir = -1;
     }
+    st.text = text;            // track the latest read as the pass's reference plate
     st.lastSeenMs = nowMs;
     return st.passId;
 }

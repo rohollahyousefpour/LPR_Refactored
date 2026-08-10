@@ -69,6 +69,12 @@ public:
         // again after it starts a NEW pass with a fresh passId. Mirrors the backend's
         // pass-correlation window intent (kept small so distinct passes never merge).
         long passGapMs = 5000;
+        // Two consecutive reads at a gate whose plate texts are at least this
+        // Jaro-Winkler similar are treated as the SAME pass (so OCR flicker between
+        // the early announce and the settled correction keeps one passId, and the
+        // backend can merge them instead of inserting a duplicate). A clearly
+        // different plate (below this) starts a new pass.
+        double passPlateSimilarity = 0.85;
     };
 
     DetectionWorker(std::shared_ptr<FrameQueue> input, IPlateRecognizer& recognizer, Config cfg);
@@ -116,7 +122,7 @@ private:
     // Per-pass state (key = gate + ":" + plate text) for early-announce + correction:
     // a stable passId reused across the pass, whether the early event fired, and the
     // last physical direction sent (to avoid re-sending an unchanged direction).
-    struct PassState { std::string passId; long lastSeenMs = 0; bool emittedEarly = false; int lastSentDir = -1; };
+    struct PassState { std::string passId; std::string text; long lastSeenMs = 0; bool emittedEarly = false; int lastSentDir = -1; };
     std::unordered_map<std::string, PassState> passes_;
 
     std::shared_ptr<FrameQueue>  input_;

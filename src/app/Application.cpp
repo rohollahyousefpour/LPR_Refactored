@@ -549,6 +549,10 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         dwcfg.direction.cooldownMs     = (long)sm.getLpr<int>("direction_cooldown_sec").value_or(8) * 1000;
         dwcfg.direction.trackGapMs     = (long)sm.getLpr<int>("direction_gap_sec").value_or(3) * 1000;
         dwcfg.direction.requireYAgree  = (sm.getLpr<int>("direction_require_y").value_or(0) == 1);
+        // Same-pass plate similarity: OCR flicker within one pass keeps its passId
+        // (so the backend merges early + correction); a clearly different plate starts
+        // a new pass. Reuses the OCR consensus threshold, floored a little lower.
+        dwcfg.passPlateSimilarity      = std::min(0.95, (double)sm.getLpr<float>("plate_similarity").value_or(0.90f) - 0.05);
         // How long to hold a plate waiting for its enter/exit decision before sending it anyway.
         // The processor emits a pass on its first read, but the decision needs several sightings;
         // holding lets the sent message carry a real ENTER/EXIT instead of 0/unknown. 0 = send
