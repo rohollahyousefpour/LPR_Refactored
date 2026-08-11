@@ -21,21 +21,21 @@ double DirectionEstimator::avgLast(const std::deque<double>& d) const {
 
 int DirectionEstimator::current(const std::string& key) const {
     auto it = tracks_.find(key);
-    return it == tracks_.end() ? Unknown : it->second.decided;
+    return it == tracks_.end() ? Unknown : it->second.reported;
 }
 
 int DirectionEstimator::update(const std::string& key, double sizePx, double yCenterPx, long tsMs) {
     Track& t = tracks_[key];
 
-    // Start a fresh pass if the plate has been gone a while, or a previous decision's cooldown
-    // has elapsed (so the same plate driving back out later is judged independently).
+    // Start a fresh pass if the plate has been gone a while, or a FINALIZED decision's
+    // cooldown has elapsed (so the same plate driving back out later is judged afresh).
     if (t.lastTs != 0 && tsMs - t.lastTs > cfg_.trackGapMs)
         t = Track{};
-    else if (t.decided != Unknown && tsMs - t.decidedTs > cfg_.cooldownMs)
+    else if (t.locked && tsMs - t.decidedTs > cfg_.cooldownMs)
         t = Track{};
     t.lastTs = tsMs;
 
-    if (t.decided != Unknown) return Unknown;            // already committed this pass -> no repeat event
+    if (t.locked) return Unknown;                        // finalized this pass -> no repeat events
 
     if (sizePx > 0) { t.sizes.push_back(sizePx); t.ys.push_back(yCenterPx); }
     if ((int)t.sizes.size() < cfg_.minSightings) return Unknown;
@@ -62,8 +62,15 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
         if (dir == Receding  && dy > -cfg_.minYShiftPx) dir = Unknown;
     }
 
-    if (dir != Unknown) { t.decided = dir; t.decidedTs = tsMs; }
-    return dir;
+    if (dir == Unknown) return Unknown;                  // not enough signal yet -> keep watching
+
+    // Finalize once enough movement confirms the trend, so a late noisy frame can't
+    // flip a settled call. Until then keep refining: a stronger or opposite trend from
+    // MORE sightings can still correct the early guess.
+    if ((int)t.sizes.size() >= cfg_.confirmSightings) { t.locked = true; t.decidedTs = tsMs; }
+
+    if (dir != t.reported) { t.reported = dir; return dir; }   // first announce OR a correction
+    return Unknown;                                            // unchanged this pass -> no event
 }
 
 } // namespace lpr

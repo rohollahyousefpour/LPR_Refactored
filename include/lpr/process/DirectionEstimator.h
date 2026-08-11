@@ -37,6 +37,12 @@ public:
         // (a symmetric approach-then-leave nets ~0 and is still left Unknown).
         int    trendMinSightings = 6;
         double minTrendDeltaPx   = 5.0;
+        // The decision keeps REFINING until at least this many sightings accumulate,
+        // then it is finalized (locked) so a late noisy frame can't flip a settled
+        // call. Larger = uses MORE movement before committing = more accurate, at the
+        // cost of a slightly later final answer (the early guess is still announced
+        // immediately and corrected as more movement confirms it).
+        int    confirmSightings  = 8;
     };
 
     DirectionEstimator() = default;
@@ -60,8 +66,9 @@ private:
         std::deque<double> sizes;
         std::deque<double> ys;
         long lastTs    = 0;
-        int  decided   = Unknown;
-        long decidedTs = 0;
+        int  reported  = Unknown;   // last direction emitted this pass (refined over sightings)
+        long decidedTs = 0;         // when the pass was finalized (drives the cooldown reset)
+        bool locked    = false;     // enough movement confirmed the trend -> no more changes
     };
     Config cfg_;
     std::map<std::string, Track> tracks_;

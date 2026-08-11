@@ -66,8 +66,8 @@ long DetectionWorker::nowSteadyMs() {
 
 // Standing enter/exit for a plate: the estimator's committed physical trend mapped through the
 // per-camera Entry_Exit polarity. 0 = unknown/undecided, 1 = enter, 2 = exit.
-int DetectionWorker::directionFor(const std::string& gate, const std::string& text) {
-    const int trend = dir_.current(gate + ":" + text);
+int DetectionWorker::directionFor(const std::string& gate, const std::string& /*text*/) {
+    const int trend = dir_.current(gate);   // one pass per gate: OCR flicker keeps ONE track
     if (trend == DirectionEstimator::Unknown) return 0;
     const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(gate) : true;
     if (trend == DirectionEstimator::Approaching) return approachEnter ? 1 : 2;
@@ -76,8 +76,8 @@ int DetectionWorker::directionFor(const std::string& gate, const std::string& te
 
 // PHYSICAL size-trend only (no per-camera polarity): 0 unknown, 1 approaching
 // (plate growing), 2 receding (shrinking). The backend maps this to entry/exit.
-int DetectionWorker::physicalDirection(const std::string& gate, const std::string& text) {
-    const int trend = dir_.current(gate + ":" + text);
+int DetectionWorker::physicalDirection(const std::string& gate, const std::string& /*text*/) {
+    const int trend = dir_.current(gate);   // gate-keyed: accumulates all of the pass's movement
     if (trend == DirectionEstimator::Approaching) return 1;
     if (trend == DirectionEstimator::Receding)   return 2;
     return 0;
@@ -304,22 +304,29 @@ void DetectionWorker::process(FrameItem& item) {
     if (cfg_.directionEnable && !results.empty()) {
         // Per-camera polarity: does a plate approaching the camera mean ENTER? (Entry_Exit=0)
         const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(item.gate) : true;
+        // One gate-keyed track per pass: feed the estimator ONCE per frame with the
+        // LARGEST plate (the nearest, realest vehicle), so every sighting of the pass
+        // — regardless of OCR flicker — accumulates in a single track. More movement
+        // samples => a more accurate, refine-able enter/exit decision.
+        const PlateResult* best = nullptr; double bestSz = 0.0;
         for (const PlateResult& r : results) {
             if (r.text.empty()) continue;
             const double sz = std::sqrt(std::max(0.0f, r.box.size.width * r.box.size.height));
-            const std::string dkey = item.gate + ":" + r.text;
-            const int event    = dir_.update(dkey, sz, r.box.center.y, nowMs); // non-Unknown ONLY on commit
-            const int standing = dir_.current(dkey);                           // committed dir for this pass
-            int direction = 0;   // 0 unknown, 1 enter, 2 exit
-            if (standing == DirectionEstimator::Approaching) direction = approachEnter ? 1 : 2;
-            else if (standing == DirectionEstimator::Receding) direction = approachEnter ? 2 : 1;
-            dirByText[r.text] = direction;
-            if (event != DirectionEstimator::Unknown)   // fire the enter/exit log exactly once per pass
-                LOGI() << "DetectionWorker[" << item.gate << "]: " << r.text << " "
-                       << (event == DirectionEstimator::Approaching ? "approaching" : "receding")
-                       << " -> " << (direction == 1 ? "ENTER" : "EXIT")
-                       << " (Entry_Exit polarity approach=" << (approachEnter ? "enter" : "exit") << ")";
+            if (sz > bestSz) { bestSz = sz; best = &r; }
         }
+        int event = DirectionEstimator::Unknown;
+        if (best && bestSz > 0.0)
+            event = dir_.update(item.gate, bestSz, best->box.center.y, nowMs); // non-Unknown on announce/correction
+        const int standing = dir_.current(item.gate);
+        int direction = 0;   // 0 unknown, 1 enter, 2 exit
+        if (standing == DirectionEstimator::Approaching) direction = approachEnter ? 1 : 2;
+        else if (standing == DirectionEstimator::Receding) direction = approachEnter ? 2 : 1;
+        for (const PlateResult& r : results) if (!r.text.empty()) dirByText[r.text] = direction;
+        if (event != DirectionEstimator::Unknown && best)   // fire the enter/exit log on announce/correction
+            LOGI() << "DetectionWorker[" << item.gate << "]: " << best->text << " "
+                   << (event == DirectionEstimator::Approaching ? "approaching" : "receding")
+                   << " -> " << (direction == 1 ? "ENTER" : "EXIT")
+                   << " (Entry_Exit polarity approach=" << (approachEnter ? "enter" : "exit") << ")";
     }
 
     // Run each recognized plate through the processor (dedup/validate/tag) and sink the survivors.
@@ -347,10 +354,9 @@ void DetectionWorker::process(FrameItem& item) {
         // A pass seen too few times never commits a direction, so it stays 0/unknown
         // and the backend records it as «نامشخص» (not a wrong exit). The module sends
         // the PHYSICAL trend only; the backend applies per-camera Entry/Exit polarity.
-        const std::string key = item.gate + ":" + out.plate.text;
-        out.plate.passId = passIdFor(item.gate, out.plate.text, nowMs);
+        out.plate.passId = passIdFor(item.gate, out.plate.text, nowMs);   // manages passes_[gate]
         const int phys = cfg_.directionEnable ? physicalDirection(item.gate, out.plate.text) : 0;
-        PassState& st = passes_[key];
+        PassState& st = passes_[item.gate];   // SAME gate-keyed pass state passIdFor maintains
         if (!st.emittedEarly) {
             out.plate.direction = phys;
             st.emittedEarly = true;

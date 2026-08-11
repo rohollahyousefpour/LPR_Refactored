@@ -7,6 +7,7 @@ int main() {
     DirectionEstimator::Config cfg;
     cfg.minSightings = 3; cfg.minGrowthRatio = 1.15; cfg.window = 1;
     cfg.trackGapMs = 3000; cfg.cooldownMs = 8000;
+    cfg.confirmSightings = 3;   // most cases: finalize as soon as the trend is clear
 
     // Approaching plate (sizes grow) -> ENTER, committed once size trend is clear.
     {
@@ -120,6 +121,37 @@ int main() {
         double seq[] = {50, 52, 54, 54, 52, 50};   // small swing, net 0, ratio stays < 1.15
         for (int i = 0; i < 6; ++i) last = d.update("g:HUMP", seq[i], 100, 1000 + i * 100);
         LPR_CHECK(last == DirectionEstimator::Unknown);
+    }
+
+    // ── Refine with MORE movement: an early guess is corrected as more sightings
+    // accumulate, then finalized once confirmSightings reads confirm the trend. ──
+    {
+        DirectionEstimator::Config rc = cfg;
+        rc.confirmSightings = 8; rc.trackGapMs = 100000; rc.cooldownMs = 100000;
+        DirectionEstimator d(rc);
+        // First few reads shrink -> an early Receding guess.
+        d.update("g:REF", 60, 100, 1000);
+        d.update("g:REF", 55, 100, 1100);
+        LPR_CHECK(d.update("g:REF", 50, 100, 1200) == DirectionEstimator::Receding);
+        LPR_CHECK(d.current("g:REF") == DirectionEstimator::Receding);
+        // More movement reveals a net approach -> CORRECTION to Approaching (same pass,
+        // not finalized yet because fewer than confirmSightings reads).
+        d.update("g:REF", 60, 100, 1300);
+        LPR_CHECK(d.update("g:REF", 70, 100, 1400) == DirectionEstimator::Approaching); // 70/60=1.17
+        LPR_CHECK(d.current("g:REF") == DirectionEstimator::Approaching);
+    }
+    // Once finalized (>= confirmSightings), a late reversing frame can no longer flip it.
+    {
+        DirectionEstimator::Config rc = cfg;
+        rc.confirmSightings = 4; rc.trackGapMs = 100000; rc.cooldownMs = 100000;
+        DirectionEstimator d(rc);
+        d.update("g:LOCK", 30, 100, 1000);
+        d.update("g:LOCK", 40, 100, 1100);
+        d.update("g:LOCK", 55, 100, 1200);                                   // Approaching (3 reads)
+        LPR_CHECK(d.update("g:LOCK", 70, 100, 1300) == DirectionEstimator::Unknown); // 4th: same dir, now LOCKED
+        // A later shrink is ignored — the pass is finalized.
+        LPR_CHECK(d.update("g:LOCK", 20, 100, 1400) == DirectionEstimator::Unknown);
+        LPR_CHECK(d.current("g:LOCK") == DirectionEstimator::Approaching);
     }
 
     return LPR_TEST_RESULT();

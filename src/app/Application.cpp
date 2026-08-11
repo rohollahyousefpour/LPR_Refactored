@@ -554,6 +554,10 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         // consistent net size change once enough sightings accumulate.
         dwcfg.direction.trendMinSightings = std::max(3, sm.getLpr<int>("direction_trend_min_sightings").value_or(6));
         dwcfg.direction.minTrendDeltaPx   = (double)sm.getLpr<float>("direction_trend_delta_px").value_or(5.0f);
+        // Use MORE movement before finalizing: the early guess is announced at
+        // minSightings and refined/corrected until this many sightings confirm it.
+        dwcfg.direction.confirmSightings  = std::max(sm.getLpr<int>("direction_min_sightings").value_or(3),
+                                                     sm.getLpr<int>("direction_confirm_sightings").value_or(8));
         // Same-pass plate similarity: OCR flicker within one pass keeps its passId
         // (so the backend merges early + correction); a clearly different plate starts
         // a new pass. Reuses the OCR consensus threshold, floored a little lower.
