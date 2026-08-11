@@ -30,6 +30,13 @@ public:
         bool   requireYAgree  = false;  // also require vertical motion to agree
         double minYShiftPx    = 8.0;    // vertical-motion threshold when requireYAgree
         int    window         = 3;      // average first/last N sizes to fight box jitter
+        // Slow / stopping-vehicle path: a low-speed vehicle changes the plate size
+        // only a little (the ratio never reaches minGrowthRatio), but produces MANY
+        // consistent sightings — so once at least this many reads accumulate, a net
+        // size change of at least minTrendDeltaPx pixels is trusted as the trend
+        // (a symmetric approach-then-leave nets ~0 and is still left Unknown).
+        int    trendMinSightings = 6;
+        double minTrendDeltaPx   = 5.0;
     };
 
     DirectionEstimator() = default;

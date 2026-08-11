@@ -1,6 +1,7 @@
 #include "lpr/process/DirectionEstimator.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace lpr {
 
@@ -46,6 +47,14 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
     int dir = Unknown;
     if (ratio >= cfg_.minGrowthRatio)            dir = Approaching;   // plate grew -> approaching
     else if (ratio <= 1.0 / cfg_.minGrowthRatio) dir = Receding;    // plate shrank -> receding
+    else if ((int)t.sizes.size() >= cfg_.trendMinSightings &&
+             std::fabs(s1 - s0) >= cfg_.minTrendDeltaPx) {
+        // Slow / stopping vehicle: the size barely changes so the ratio never crosses
+        // minGrowthRatio, but with this many consistent sightings a small net size
+        // change is a reliable trend. (A symmetric approach-then-leave nets ~0 px and
+        // stays Unknown, so a car that merely pauses in view is not mislabeled.)
+        dir = (s1 > s0) ? Approaching : Receding;
+    }
 
     if (dir != Unknown && cfg_.requireYAgree) {
         const double dy = avgLast(t.ys) - avgFirst(t.ys);   // low camera: approaching drifts DOWN (+y)

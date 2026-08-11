@@ -80,5 +80,47 @@ int main() {
         LPR_CHECK(d.update("g:DEF", 50, 120, 1200) == DirectionEstimator::Approaching); // 50/30=1.67
     }
 
+    // ── Slow / stopping vehicle: size barely changes so the ratio never reaches
+    // minGrowthRatio, but many consistent sightings + a small net delta still decide. ──
+    {
+        DirectionEstimator::Config sc = cfg;   // window=1, growth=1.15
+        sc.trendMinSightings = 6; sc.minTrendDeltaPx = 5.0;
+        // Slow approach: 50 -> 55 over 6 reads (ratio 1.10 < 1.15, net +5px).
+        DirectionEstimator d(sc);
+        LPR_CHECK(d.update("g:SLOW", 50, 100, 1000) == DirectionEstimator::Unknown);
+        LPR_CHECK(d.update("g:SLOW", 51, 101, 1100) == DirectionEstimator::Unknown);
+        LPR_CHECK(d.update("g:SLOW", 52, 102, 1200) == DirectionEstimator::Unknown);
+        LPR_CHECK(d.update("g:SLOW", 53, 103, 1300) == DirectionEstimator::Unknown);
+        LPR_CHECK(d.update("g:SLOW", 54, 104, 1400) == DirectionEstimator::Unknown);   // n=5, delta 4 < 5
+        LPR_CHECK(d.update("g:SLOW", 55, 105, 1500) == DirectionEstimator::Approaching); // n=6, delta 5
+    }
+    {
+        DirectionEstimator::Config sc = cfg;
+        sc.trendMinSightings = 6; sc.minTrendDeltaPx = 5.0;
+        // Slow recede: 56 -> 51 over 6 reads.
+        DirectionEstimator d(sc);
+        for (int i = 0; i < 5; ++i) d.update("g:SLOWR", 56 - i, 100, 1000 + i * 100);
+        LPR_CHECK(d.update("g:SLOWR", 51, 100, 1500) == DirectionEstimator::Receding);
+    }
+    {
+        DirectionEstimator::Config sc = cfg;
+        sc.trendMinSightings = 6; sc.minTrendDeltaPx = 5.0;
+        // Fully stopped: no size change at all -> stays Unknown (can't be inferred).
+        DirectionEstimator d(sc);
+        for (int i = 0; i < 8; ++i)
+            LPR_CHECK(d.update("g:STOP", 50, 100, 1000 + i * 100) == DirectionEstimator::Unknown);
+    }
+    {
+        DirectionEstimator::Config sc = cfg;
+        sc.trendMinSightings = 6; sc.minTrendDeltaPx = 5.0;
+        // Pause-in-view (symmetric hump): approaches then leaves the SAME way -> ~0 net
+        // delta -> not mislabeled (stays Unknown).
+        DirectionEstimator d(sc);
+        int last = DirectionEstimator::Unknown;
+        double seq[] = {50, 52, 54, 54, 52, 50};   // small swing, net 0, ratio stays < 1.15
+        for (int i = 0; i < 6; ++i) last = d.update("g:HUMP", seq[i], 100, 1000 + i * 100);
+        LPR_CHECK(last == DirectionEstimator::Unknown);
+    }
+
     return LPR_TEST_RESULT();
 }

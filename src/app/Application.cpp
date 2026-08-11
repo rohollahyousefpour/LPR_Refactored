@@ -549,6 +549,11 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         dwcfg.direction.cooldownMs     = (long)sm.getLpr<int>("direction_cooldown_sec").value_or(8) * 1000;
         dwcfg.direction.trackGapMs     = (long)sm.getLpr<int>("direction_gap_sec").value_or(3) * 1000;
         dwcfg.direction.requireYAgree  = (sm.getLpr<int>("direction_require_y").value_or(0) == 1);
+        // Slow/stopping-vehicle trend path (handles a low-speed car whose plate size
+        // barely changes so the growth ratio never fires): decide from a small but
+        // consistent net size change once enough sightings accumulate.
+        dwcfg.direction.trendMinSightings = std::max(3, sm.getLpr<int>("direction_trend_min_sightings").value_or(6));
+        dwcfg.direction.minTrendDeltaPx   = (double)sm.getLpr<float>("direction_trend_delta_px").value_or(5.0f);
         // Same-pass plate similarity: OCR flicker within one pass keeps its passId
         // (so the backend merges early + correction); a clearly different plate starts
         // a new pass. Reuses the OCR consensus threshold, floored a little lower.
