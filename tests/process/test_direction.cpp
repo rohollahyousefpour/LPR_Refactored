@@ -182,5 +182,31 @@ int main() {
         LPR_CHECK(d.current("g:LOCK") == DirectionEstimator::Approaching);
     }
 
+    // ── MANY frames (slow / stopping vehicle): the averaging window grows with the
+    // frame count, so a long noisy pass is judged from a wide baseline and still gets
+    // the right direction. 40-frame slow approach with per-frame box jitter. ──
+    {
+        DirectionEstimator::Config mc = cfg;
+        mc.window = 3; mc.confirmSightings = 60; mc.confirmAgreeing = 3;
+        mc.trackGapMs = 100000; mc.cooldownMs = 100000;
+        DirectionEstimator d(mc);
+        for (int i = 0; i < 40; ++i) {
+            const double jitter = (i % 2 == 0) ? 2.0 : -2.0;              // box jitter each frame
+            d.update("g:MANY", 100.0 + (double)i * 0.8 + jitter, 100, 1000 + i * 40);
+        }
+        LPR_CHECK(d.current("g:MANY") == DirectionEstimator::Approaching);
+    }
+    {
+        DirectionEstimator::Config mc = cfg;
+        mc.window = 3; mc.confirmSightings = 60; mc.confirmAgreeing = 3;
+        mc.trackGapMs = 100000; mc.cooldownMs = 100000;
+        DirectionEstimator d(mc);
+        for (int i = 0; i < 40; ++i) {
+            const double jitter = (i % 2 == 0) ? 2.0 : -2.0;
+            d.update("g:MANYR", 140.0 - (double)i * 0.8 + jitter, 100, 1000 + i * 40);
+        }
+        LPR_CHECK(d.current("g:MANYR") == DirectionEstimator::Receding);
+    }
+
     return LPR_TEST_RESULT();
 }

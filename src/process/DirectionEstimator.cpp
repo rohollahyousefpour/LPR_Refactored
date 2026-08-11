@@ -5,16 +5,24 @@
 
 namespace lpr {
 
+// Averaging window at each end of the pass. It GROWS with the number of sightings
+// (a quarter of them, floored at cfg_.window), so a long slow/stopping pass with MANY
+// frames averages the trend over a wide baseline at each end — robust to per-frame
+// box jitter instead of being read from just a couple of frames. Capped at half the
+// history so the first and last windows never overlap.
+static int trendWindow(int window, int size) {
+    const int half = std::max(1, size / 2);
+    return std::clamp(std::max(window, size / 4), 1, half);
+}
+
 double DirectionEstimator::avgFirst(const std::deque<double>& d) const {
-    // Cap the window at half the history so the first/last windows never overlap (otherwise at
-    // exactly minSightings the two averages would be identical and never cross the threshold).
-    const int n = std::max(1, std::min((int)cfg_.window, (int)d.size() / 2));
+    const int n = trendWindow((int)cfg_.window, (int)d.size());
     double s = 0; for (int i = 0; i < n; ++i) s += d[i];
     return s / n;
 }
 
 double DirectionEstimator::avgLast(const std::deque<double>& d) const {
-    const int n = std::max(1, std::min((int)cfg_.window, (int)d.size() / 2));
+    const int n = trendWindow((int)cfg_.window, (int)d.size());
     double s = 0; for (int i = 0; i < n; ++i) s += d[d.size() - 1 - i];
     return s / n;
 }
