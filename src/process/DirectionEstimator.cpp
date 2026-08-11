@@ -64,10 +64,15 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
 
     if (dir == Unknown) return Unknown;                  // not enough signal yet -> keep watching
 
-    // Finalize once enough movement confirms the trend, so a late noisy frame can't
-    // flip a settled call. Until then keep refining: a stronger or opposite trend from
-    // MORE sightings can still correct the early guess.
-    if ((int)t.sizes.size() >= cfg_.confirmSightings) { t.locked = true; t.decidedTs = tsMs; }
+    // Certainty by agreement: count how many CONSECUTIVE images give the same direction.
+    // A flip resets the streak, so the estimator keeps examining more images until several
+    // in a row agree. It is finalized (locked) when the streak reaches confirmAgreeing, or
+    // as a backstop once confirmSightings total reads accumulate (a persistently unstable
+    // pass still ends). Until then it keeps refining, correcting the early guess.
+    if (dir == t.pendingDir) ++t.agree; else { t.pendingDir = dir; t.agree = 1; }
+    if (t.agree >= cfg_.confirmAgreeing || (int)t.sizes.size() >= cfg_.confirmSightings) {
+        t.locked = true; t.decidedTs = tsMs;
+    }
 
     if (dir != t.reported) { t.reported = dir; return dir; }   // first announce OR a correction
     return Unknown;                                            // unchanged this pass -> no event

@@ -43,6 +43,11 @@ public:
         // cost of a slightly later final answer (the early guess is still announced
         // immediately and corrected as more movement confirms it).
         int    confirmSightings  = 8;
+        // Certainty by AGREEMENT: the direction must come out the same on this many
+        // CONSECUTIVE images before it is finalized. A flip resets the counter, so a
+        // noisy pass keeps examining more images until several in a row agree.
+        // confirmSightings is a hard cap so a persistently unstable pass still ends.
+        int    confirmAgreeing   = 3;
     };
 
     DirectionEstimator() = default;
@@ -67,6 +72,8 @@ private:
         std::deque<double> ys;
         long lastTs    = 0;
         int  reported  = Unknown;   // last direction emitted this pass (refined over sightings)
+        int  pendingDir = Unknown;  // direction of the current agreement streak
+        int  agree     = 0;         // consecutive images agreeing on pendingDir
         long decidedTs = 0;         // when the pass was finalized (drives the cooldown reset)
         bool locked    = false;     // enough movement confirmed the trend -> no more changes
     };

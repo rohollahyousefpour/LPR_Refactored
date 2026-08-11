@@ -140,6 +140,34 @@ int main() {
         LPR_CHECK(d.update("g:REF", 70, 100, 1400) == DirectionEstimator::Approaching); // 70/60=1.17
         LPR_CHECK(d.current("g:REF") == DirectionEstimator::Approaching);
     }
+    // Certainty by agreement: examines several images until the SAME direction comes out
+    // on confirmAgreeing consecutive reads, then finalizes (not on a single decision).
+    {
+        DirectionEstimator::Config ac = cfg;
+        ac.confirmSightings = 20; ac.confirmAgreeing = 3;   // certainty by agreement, not a fixed count
+        ac.trackGapMs = 100000; ac.cooldownMs = 100000;
+        DirectionEstimator d(ac);
+        d.update("g:AG", 30, 100, 1000);
+        d.update("g:AG", 40, 100, 1100);
+        LPR_CHECK(d.update("g:AG", 55, 100, 1200) == DirectionEstimator::Approaching); // decide, streak=1
+        LPR_CHECK(d.update("g:AG", 70, 100, 1300) == DirectionEstimator::Unknown);      // streak=2 (same dir)
+        LPR_CHECK(d.update("g:AG", 85, 100, 1400) == DirectionEstimator::Unknown);      // streak=3 -> finalized
+        LPR_CHECK(d.update("g:AG", 10, 100, 1500) == DirectionEstimator::Unknown);      // locked: reversal ignored
+        LPR_CHECK(d.current("g:AG") == DirectionEstimator::Approaching);
+    }
+    // A flip before agreement resets the streak, so more images are examined.
+    {
+        DirectionEstimator::Config ac = cfg;
+        ac.confirmSightings = 20; ac.confirmAgreeing = 3;
+        ac.trackGapMs = 100000; ac.cooldownMs = 100000;
+        DirectionEstimator d(ac);
+        d.update("g:FLIP", 60, 100, 1000);
+        d.update("g:FLIP", 55, 100, 1100);
+        LPR_CHECK(d.update("g:FLIP", 50, 100, 1200) == DirectionEstimator::Receding);   // streak R=1
+        LPR_CHECK(d.update("g:FLIP", 70, 100, 1300) == DirectionEstimator::Approaching);// flip -> streak A=1 (correction)
+        // Not finalized yet (needs 3 agreeing); keeps examining and can still change.
+        LPR_CHECK(d.current("g:FLIP") == DirectionEstimator::Approaching);
+    }
     // Once finalized (>= confirmSightings), a late reversing frame can no longer flip it.
     {
         DirectionEstimator::Config rc = cfg;

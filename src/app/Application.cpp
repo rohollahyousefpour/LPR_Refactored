@@ -558,6 +558,9 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         // minSightings and refined/corrected until this many sightings confirm it.
         dwcfg.direction.confirmSightings  = std::max(sm.getLpr<int>("direction_min_sightings").value_or(3),
                                                      sm.getLpr<int>("direction_confirm_sightings").value_or(8));
+        // Certainty: finalize only after the direction agrees on this many consecutive
+        // images (a flip keeps it examining more images until several in a row agree).
+        dwcfg.direction.confirmAgreeing   = std::max(2, sm.getLpr<int>("direction_confirm_agreeing").value_or(3));
         // Same-pass plate similarity: OCR flicker within one pass keeps its passId
         // (so the backend merges early + correction); a clearly different plate starts
         // a new pass. Reuses the OCR consensus threshold, floored a little lower.
