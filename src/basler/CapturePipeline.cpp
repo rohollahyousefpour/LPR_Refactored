@@ -1,7 +1,13 @@
 #include "CapturePipeline.h"
 #include "AppLogger.h"
 #include "SettingsManager_.h"
+#include "lpr/basler/GigeRateAdapt.h"
 #include <opencv2/core.hpp>
+
+using lpr::GigeAdaptCfg;
+using lpr::GigeAdaptDecision;
+using lpr::GigeAdaptAction;
+using lpr::gigeAdaptDecide;
 #include <algorithm>
 #include <ctime>
 #include <thread>
@@ -44,19 +50,19 @@ void CapturePipeline::run() {
     struct Adapt { double ceil = 0, cur = 0; int grabs = 0, bad = 0; long lastStepMs = 0;
                    bool inited = false, skip = false; };
     std::unordered_map<std::string, Adapt> adapt;
-    struct { bool en; int window; double downPct, upPct, downF, upF, minFps; long recoverMs; } acfg;
+    bool adaptEnabled = true; int adaptWindow = 150; GigeAdaptCfg acfg;
     {
         auto& sm = SettingsManager::instance();
-        acfg.en        = sm.getLpr<int>("gige_adapt_enable").value_or(1) != 0;
-        acfg.window    = std::max(20, sm.getLpr<int>("gige_adapt_window").value_or(150));
+        adaptEnabled = sm.getLpr<int>("gige_adapt_enable").value_or(1) != 0;
+        adaptWindow  = std::max(20, sm.getLpr<int>("gige_adapt_window").value_or(150));
         acfg.downPct   = (double)sm.getLpr<float>("gige_adapt_loss_pct").value_or(2.0f);
         acfg.upPct     = (double)sm.getLpr<float>("gige_adapt_recover_loss_pct").value_or(0.2f);
         acfg.downF     = (double)sm.getLpr<float>("gige_adapt_down_factor").value_or(0.75f);
         acfg.upF       = (double)sm.getLpr<float>("gige_adapt_up_factor").value_or(1.15f);
         acfg.minFps    = (double)sm.getLpr<float>("gige_adapt_min_fps").value_or(1.0f);
         acfg.recoverMs = (long)sm.getLpr<int>("gige_adapt_recover_sec").value_or(15) * 1000;
-        LOGI() << "[bw-adapt] " << (acfg.en ? "enabled" : "disabled")
-               << " (window=" << acfg.window << " down>=" << acfg.downPct << "% floor=" << acfg.minFps
+        LOGI() << "[bw-adapt] " << (adaptEnabled ? "enabled" : "disabled")
+               << " (window=" << adaptWindow << " down>=" << acfg.downPct << "% floor=" << acfg.minFps
                << "fps recover=" << (acfg.recoverMs / 1000) << "s)";
     }
     const auto nowMs = [] {
@@ -64,7 +70,7 @@ void CapturePipeline::run() {
                    std::chrono::steady_clock::now().time_since_epoch()).count();
     };
     auto adaptRate = [&](const std::string& serial, CameraDevice& dev, CameraDevice::GrabStatus st) {
-        if (!acfg.en) return;
+        if (!adaptEnabled) return;
         Adapt& a = adapt[serial];
         if (!a.inited) {
             a.inited = true;
@@ -80,23 +86,18 @@ void CapturePipeline::run() {
         if (a.skip) return;
         ++a.grabs;
         if (st == CameraDevice::GrabStatus::BadFrame || st == CameraDevice::GrabStatus::Timeout) ++a.bad;
-        if (a.grabs < acfg.window) return;
+        if (a.grabs < adaptWindow) return;
         const double lossPct = 100.0 * (double)a.bad / (double)a.grabs;
         const long now = nowMs();
-        if (lossPct >= acfg.downPct && a.cur > acfg.minFps) {
-            const double nf = std::max(acfg.minFps, a.cur * acfg.downF);
-            if (dev.setAcquisitionFrameRate(nf)) {
+        const GigeAdaptDecision d = gigeAdaptDecide(a.cur, a.ceil, a.lastStepMs, lossPct, now, acfg);
+        if (d.action != GigeAdaptAction::None && dev.setAcquisitionFrameRate(d.newFps)) {
+            if (d.action == GigeAdaptAction::Throttle)
                 LOGW() << "[bw-adapt][" << serial << "] packet loss " << lossPct << "% over "
-                       << a.grabs << " frames -> THROTTLE fps " << a.cur << " -> " << nf;
-                a.cur = nf; a.lastStepMs = now;
-            }
-        } else if (lossPct <= acfg.upPct && a.cur < a.ceil && (now - a.lastStepMs) >= acfg.recoverMs) {
-            const double nf = std::min(a.ceil, a.cur * acfg.upF);
-            if (dev.setAcquisitionFrameRate(nf)) {
+                       << a.grabs << " frames -> THROTTLE fps " << a.cur << " -> " << d.newFps;
+            else
                 LOGI() << "[bw-adapt][" << serial << "] link clean (" << lossPct << "% loss) -> RECOVER fps "
-                       << a.cur << " -> " << nf;
-                a.cur = nf; a.lastStepMs = now;
-            }
+                       << a.cur << " -> " << d.newFps;
+            a.cur = d.newFps; a.lastStepMs = now;
         }
         a.grabs = 0; a.bad = 0;   // reset the window
     };
