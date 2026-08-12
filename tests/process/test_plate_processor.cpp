@@ -105,6 +105,25 @@ int main() {
         LPR_CHECK(e.has_value() && e->text == "55C26487");      // exactly what was read
     }
 
+    // Consensus vs best-single-frame: a REPEATED read must beat one higher-confidence
+    // near-duplicate MISREAD (accuracy-weighted vote), so the emitted text is the
+    // majority — not the single most-confident (possibly wrong) frame.
+    {
+        PlateProcessorConfig vc; vc.minVotes = 3;   // emit only after 3 in-pass reads
+        PlateProcessor pv(vc);
+        auto v = [](const std::string& t, float c, long ms) {
+            PlateResult p; p.text=t; p.confidence=c; p.trackId=-1; p.gate="gc"; p.timestamp=ms; return p;
+        };
+        LPR_CHECK(!pv.process(v("12A34567", 0.60f, 1000)).has_value());  // vote 1 (X)
+        LPR_CHECK(!pv.process(v("12A34567", 0.60f, 1100)).has_value());  // vote 2 (X)  X sum=1.2
+        auto e = pv.process(v("12A34561", 0.95f, 1200));                 // vote 3 (Y near-dup, w=0.95)
+        LPR_CHECK(e.has_value());
+        if (e) {
+            std::cout << "consensus emit: " << e->text << "\n";
+            LPR_CHECK(e->text == "12A34567");   // majority X wins over the higher-conf single misread Y
+        }
+    }
+
     if (LPR_TEST_RESULT() == 0) std::cout << "plate_processor: OK\n";
     return LPR_TEST_RESULT();
 }
