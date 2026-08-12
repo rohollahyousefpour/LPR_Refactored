@@ -125,10 +125,19 @@ void PlateSender::run() {
         LOGI() << "PlateSender: sending plate '" << plate << "' gate=" << item->gate
                << " (" << payload.size() << " bytes, durable=" << (cfg_.durable ? 1 : 0)
                << ", subject=" << cfg_.subject << ")";
-        const bool ok = cfg_.durable ? transport_.publishDurable(cfg_.subject, payload)
-                                     : transport_.publish(cfg_.subject, payload);
-        if (ok) ++sent_;
-        else    LOGW() << "PlateSender: publish failed for " << item->gate << ":" << plate;
+        const bool queued = cfg_.durable ? transport_.publishDurable(cfg_.subject, payload)
+                                          : transport_.publish(cfg_.subject, payload);
+        // `queued` reflects ENQUEUE, not delivery: the durable/JetStream transport
+        // guarantees delivery via its outbox + retry and logs the ACTUAL per-message
+        // JetStream ack/failure itself (NatsTransport::senderLoop -> js_Publish). A
+        // false here therefore means the transport refused the item outright — only
+        // possible while the sender is shutting down — i.e. a genuine, loggable loss.
+        if (queued) {
+            ++sent_;
+        } else {
+            LOGE() << "PlateSender: transport REJECTED plate " << item->gate << ":" << plate
+                   << " (sender not running) -> plate LOST";
+        }
     }
     LOGI() << "PlateSender: stopped (sent=" << sent_ << ")";
 }

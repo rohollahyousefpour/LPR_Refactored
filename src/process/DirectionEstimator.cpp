@@ -32,6 +32,16 @@ int DirectionEstimator::current(const std::string& key) const {
     return it == tracks_.end() ? Unknown : it->second.reported;
 }
 
+int DirectionEstimator::sightingCount(const std::string& key) const {
+    auto it = tracks_.find(key);
+    return it == tracks_.end() ? 0 : static_cast<int>(it->second.sizes.size());
+}
+
+bool DirectionEstimator::isLocked(const std::string& key) const {
+    auto it = tracks_.find(key);
+    return it != tracks_.end() && it->second.locked;
+}
+
 int DirectionEstimator::update(const std::string& key, double sizePx, double yCenterPx, long tsMs) {
     Track& t = tracks_[key];
 

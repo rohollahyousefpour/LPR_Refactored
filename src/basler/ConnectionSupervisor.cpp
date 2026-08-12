@@ -668,6 +668,11 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof
 // -------------------- fault + reconnect --------------------
 
 void ConnectionSupervisor::handleFault(const std::string& serial) {
+    // A camera DROP: make it visible in the log (paired with the "[supervisor]
+    // connected <serial>" line emitted on a successful reconnect), so an operator
+    // can see the disconnect/recover cycle instead of only inferring the drop from
+    // the CapturePipeline grab-failure warning one layer up.
+    LOGW() << "[supervisor][" << serial << "] camera DROPPED -> removing device and scheduling reconnect";
     // Runs on the capture thread: remove + release the device here.
     std::unique_ptr<CameraDevice> dead;
     {

@@ -1,5 +1,6 @@
 #include "lpr/process/PlateProcessor.h"
 #include "lpr/util/JaroWinkler.h"
+#include "lpr/Log.h"
 
 #include <algorithm>
 #include <cctype>
@@ -112,6 +113,12 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     out.text = tr.consensus.empty() ? tr.best.text : tr.consensus;
     out.trackId = plate.trackId;
     out.gate = plate.gate;
+    // Trace the vote so a wrong emitted plate is debuggable: the chosen consensus,
+    // the single highest-confidence read it may have overridden, and the vote count.
+    LOGD() << "PlateProcessor[" << out.gate << "]: emit '" << out.text << "' (consensus='"
+           << tr.consensus << "' best='" << tr.best.text << "' conf=" << tr.best.confidence
+           << " votes=" << tr.reads.size()
+           << (out.text != tr.best.text ? " vote-overrode-best)" : ")");
     return out;
 }
 

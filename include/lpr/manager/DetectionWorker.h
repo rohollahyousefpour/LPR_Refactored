@@ -111,6 +111,9 @@ private:
     // last physical direction sent (to avoid re-sending an unchanged direction).
     struct PassState { std::string passId; std::string text; long lastSeenMs = 0; long lastInterval = 0; bool emittedEarly = false; int lastSentDir = -1; };
     std::unordered_map<std::string, PassState> passes_;
+    // Last enter/exit direction we LOGGED per gate, so the direction line can label
+    // a first announce vs a later CORRECTION/flip (for debugging wrong enter/exit).
+    std::unordered_map<std::string, int> lastLoggedDir_;
 
     std::shared_ptr<FrameQueue>  input_;
     IPlateRecognizer&            recognizer_;

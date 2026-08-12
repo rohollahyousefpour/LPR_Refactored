@@ -66,6 +66,12 @@ public:
     // Direction already committed for a key without adding a sighting (0 if none / reset).
     int current(const std::string& key) const;
 
+    // Diagnostics (for logging a wrong enter/exit): how many size sightings this
+    // pass has accumulated, and whether the trend is LOCKED (finalized, no more
+    // refinement). Both are 0/false for an unknown key.
+    int  sightingCount(const std::string& key) const;
+    bool isLocked(const std::string& key) const;
+
 private:
     struct Track {
         std::deque<double> sizes;

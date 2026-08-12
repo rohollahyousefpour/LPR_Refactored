@@ -294,11 +294,22 @@ void DetectionWorker::process(FrameItem& item) {
         int direction = 0;   // 0 unknown, 1 enter, 2 exit
         if (standing == DirectionEstimator::Approaching) direction = approachEnter ? 1 : 2;
         else if (standing == DirectionEstimator::Receding) direction = approachEnter ? 2 : 1;
-        if (event != DirectionEstimator::Unknown && best)   // fire the enter/exit log on announce/correction
-            LOGI() << "DetectionWorker[" << item.gate << "]: " << best->text << " "
+        if (event != DirectionEstimator::Unknown && best) { // fire the enter/exit log on announce/correction
+            // Label a first announce vs a later CORRECTION/flip, and include the
+            // evidence that drove it (plate size, how many sightings accumulated,
+            // whether the trend is locked) so a wrong enter/exit is debuggable.
+            auto lit = lastLoggedDir_.find(item.gate);
+            const char* kind = (lit == lastLoggedDir_.end()) ? "announce"
+                             : (lit->second != direction ? "CORRECTION(flip)" : "reaffirm");
+            lastLoggedDir_[item.gate] = direction;
+            LOGI() << "DetectionWorker[" << item.gate << "]: " << best->text << " " << kind << " "
                    << (event == DirectionEstimator::Approaching ? "approaching" : "receding")
                    << " -> " << (direction == 1 ? "ENTER" : "EXIT")
+                   << " size=" << (long)std::lround(bestSz)
+                   << " sightings=" << dir_.sightingCount(item.gate)
+                   << " locked=" << (dir_.isLocked(item.gate) ? 1 : 0)
                    << " (Entry_Exit polarity approach=" << (approachEnter ? "enter" : "exit") << ")";
+        }
     }
 
     // Run each recognized plate through the processor (dedup/validate/tag) and sink the survivors.
