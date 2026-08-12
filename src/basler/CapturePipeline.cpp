@@ -1,6 +1,8 @@
 #include "CapturePipeline.h"
 #include "AppLogger.h"
+#include "SettingsManager_.h"
 #include <opencv2/core.hpp>
+#include <algorithm>
 #include <ctime>
 #include <thread>
 #include <chrono>
@@ -32,6 +34,73 @@ void CapturePipeline::run() {
     std::unordered_map<std::string, int> consecutiveFails;
     constexpr int kFailThreshold = 3;
 
+    // ── Live GigE rate adaptation ────────────────────────────────────────────
+    // Real closed-loop control (beyond the static optimize-at-connect): watch the
+    // incomplete-frame / timeout (packet-loss) rate over a sliding window and, when
+    // the network degrades, throttle the camera's AcquisitionFrameRate DOWN in place
+    // (no reconnect); when the link is clean again, ease it back up toward the
+    // connect-time cap. Triggered slaves are skipped (their rate is the master's
+    // trigger). All knobs are settings-tunable.
+    struct Adapt { double ceil = 0, cur = 0; int grabs = 0, bad = 0; long lastStepMs = 0;
+                   bool inited = false, skip = false; };
+    std::unordered_map<std::string, Adapt> adapt;
+    struct { bool en; int window; double downPct, upPct, downF, upF, minFps; long recoverMs; } acfg;
+    {
+        auto& sm = SettingsManager::instance();
+        acfg.en        = sm.getLpr<int>("gige_adapt_enable").value_or(1) != 0;
+        acfg.window    = std::max(20, sm.getLpr<int>("gige_adapt_window").value_or(150));
+        acfg.downPct   = (double)sm.getLpr<float>("gige_adapt_loss_pct").value_or(2.0f);
+        acfg.upPct     = (double)sm.getLpr<float>("gige_adapt_recover_loss_pct").value_or(0.2f);
+        acfg.downF     = (double)sm.getLpr<float>("gige_adapt_down_factor").value_or(0.75f);
+        acfg.upF       = (double)sm.getLpr<float>("gige_adapt_up_factor").value_or(1.15f);
+        acfg.minFps    = (double)sm.getLpr<float>("gige_adapt_min_fps").value_or(1.0f);
+        acfg.recoverMs = (long)sm.getLpr<int>("gige_adapt_recover_sec").value_or(15) * 1000;
+        LOGI() << "[bw-adapt] " << (acfg.en ? "enabled" : "disabled")
+               << " (window=" << acfg.window << " down>=" << acfg.downPct << "% floor=" << acfg.minFps
+               << "fps recover=" << (acfg.recoverMs / 1000) << "s)";
+    }
+    const auto nowMs = [] {
+        return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch()).count();
+    };
+    auto adaptRate = [&](const std::string& serial, CameraDevice& dev, CameraDevice::GrabStatus st) {
+        if (!acfg.en) return;
+        Adapt& a = adapt[serial];
+        if (!a.inited) {
+            a.inited = true;
+            a.cur = a.ceil = dev.acquisitionFrameRate();
+            // A triggered slave's rate is driven by the master's trigger, not
+            // AcquisitionFrameRate — skip it (and never touch its rate-limit node).
+            try {
+                auto* c = dev.raw();
+                a.skip = (a.ceil <= 0.0) || (c && c->TriggerMode.IsReadable() &&
+                          c->TriggerMode.GetValue() == Basler_UniversalCameraParams::TriggerMode_On);
+            } catch (...) { a.skip = (a.ceil <= 0.0); }
+        }
+        if (a.skip) return;
+        ++a.grabs;
+        if (st == CameraDevice::GrabStatus::BadFrame || st == CameraDevice::GrabStatus::Timeout) ++a.bad;
+        if (a.grabs < acfg.window) return;
+        const double lossPct = 100.0 * (double)a.bad / (double)a.grabs;
+        const long now = nowMs();
+        if (lossPct >= acfg.downPct && a.cur > acfg.minFps) {
+            const double nf = std::max(acfg.minFps, a.cur * acfg.downF);
+            if (dev.setAcquisitionFrameRate(nf)) {
+                LOGW() << "[bw-adapt][" << serial << "] packet loss " << lossPct << "% over "
+                       << a.grabs << " frames -> THROTTLE fps " << a.cur << " -> " << nf;
+                a.cur = nf; a.lastStepMs = now;
+            }
+        } else if (lossPct <= acfg.upPct && a.cur < a.ceil && (now - a.lastStepMs) >= acfg.recoverMs) {
+            const double nf = std::min(a.ceil, a.cur * acfg.upF);
+            if (dev.setAcquisitionFrameRate(nf)) {
+                LOGI() << "[bw-adapt][" << serial << "] link clean (" << lossPct << "% loss) -> RECOVER fps "
+                       << a.cur << " -> " << nf;
+                a.cur = nf; a.lastStepMs = now;
+            }
+        }
+        a.grabs = 0; a.bad = 0;   // reset the window
+    };
+
     LOGI() << "[capture] loop start (expected=" << ctx_.expectedCount << ")";
 
     while (ctx_.live) {
@@ -62,6 +131,9 @@ void CapturePipeline::run() {
             for (auto& t : targets) {
                 cv::Mat img; bool color = false;
                 const auto status = t.dev->retrieveBGR(img, color, ctx_.grabTimeoutMs);
+
+                // Feed the live rate-adaptation controller every grab (Ok or lost).
+                adaptRate(t.serial, *t.dev, status);
 
                 if (status != CameraDevice::GrabStatus::Ok) {
                     const int fails = ++consecutiveFails[t.serial];

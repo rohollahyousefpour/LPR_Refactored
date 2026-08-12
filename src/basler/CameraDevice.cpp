@@ -1,6 +1,7 @@
 #include "CameraDevice.h"
 #include "AppLogger.h"
 #include <opencv2/core.hpp>
+#include <algorithm>
 
 CameraDevice::CameraDevice(Pylon::IPylonDevice* device, std::string serial)
     : serial_(std::move(serial))
@@ -137,6 +138,39 @@ std::string CameraDevice::subnet() const {
 bool CameraDevice::isColorModel() {
     try { return cam_->PixelFormat.GetValue() != Basler_UniversalCameraParams::PixelFormat_Mono8; }
     catch (...) { return false; }
+}
+
+double CameraDevice::acquisitionFrameRate() {
+    if (!cam_) return 0.0;
+    try {
+        if (cam_->AcquisitionFrameRate.IsReadable())    return cam_->AcquisitionFrameRate.GetValue();
+        if (cam_->AcquisitionFrameRateAbs.IsReadable()) return cam_->AcquisitionFrameRateAbs.GetValue();
+    } catch (const Pylon::GenericException&) {}
+    return 0.0;
+}
+
+bool CameraDevice::setAcquisitionFrameRate(double fps) {
+    if (!cam_) return false;
+    try {
+        // The rate limit must be enabled for a value to take effect; this is safe to
+        // change while grabbing (AcquisitionFrameRate is not acquisition-locked), which
+        // is what lets the live adaptive controller throttle without a reconnect.
+        if (cam_->AcquisitionFrameRateEnable.IsWritable())
+            cam_->AcquisitionFrameRateEnable.SetValue(true);
+        if (cam_->AcquisitionFrameRate.IsWritable()) {
+            const double v = std::clamp(fps, cam_->AcquisitionFrameRate.GetMin(),
+                                             cam_->AcquisitionFrameRate.GetMax());
+            cam_->AcquisitionFrameRate.SetValue(v);
+            return true;
+        }
+        if (cam_->AcquisitionFrameRateAbs.IsWritable()) {
+            const double v = std::clamp(fps, cam_->AcquisitionFrameRateAbs.GetMin(),
+                                             cam_->AcquisitionFrameRateAbs.GetMax());
+            cam_->AcquisitionFrameRateAbs.SetValue(v);
+            return true;
+        }
+    } catch (const Pylon::GenericException&) {}
+    return false;
 }
 
 void CameraDevice::hardRelease() noexcept {

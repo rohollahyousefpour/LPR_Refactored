@@ -57,6 +57,12 @@ public:
     // Pylon exceptions are caught and mapped to GrabStatus::DeviceError.
     GrabStatus retrieveBGR(cv::Mat& out, bool& isColor, unsigned timeoutMs = 1000);
 
+    // Live GigE rate control: read / set the streaming frame rate on the fly (used
+    // by the capture loop to throttle down on packet loss and recover). Safe to call
+    // while grabbing. Returns 0 / false when the model has no such node.
+    double acquisitionFrameRate();
+    bool   setAcquisitionFrameRate(double fps);
+
     // ---- Identity / introspection ----
     const std::string& serial() const { return serial_; }
     std::string        deviceId() const;     // GigE IP/MAC -- NOT an identity key

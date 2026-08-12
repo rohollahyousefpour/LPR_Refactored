@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
+#include <chrono>
 
 namespace lpr {
 
@@ -149,7 +150,22 @@ std::string MediaSender::buildRecordingMessage(const std::string& gate, const st
 }
 
 void MediaSender::sendLiveFrame(const std::string& gate, const cv::Mat& img) {
-    LOGD() << "MediaSender: >>> live frame gate=" << gate << " to '" << cfg_.liveSubject << "'";
+    // Do NOT log per frame (it floods the log). Log only the START of a live stream
+    // for a gate — and again if it restarts after a gap (which marks the previous
+    // stream's end). The gap threshold is well above the frame interval.
+    {
+        const long now = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        constexpr long kLiveGapMs = 3000;
+        std::lock_guard<std::mutex> lk(liveLogMtx_);
+        auto it = liveLastMs_.find(gate);
+        if (it == liveLastMs_.end())
+            LOGI() << "MediaSender: live stream started for gate " << gate;
+        else if (now - it->second > kLiveGapMs)
+            LOGI() << "MediaSender: live stream resumed for gate " << gate
+                   << " (after " << (now - it->second) / 1000 << "s gap)";
+        liveLastMs_[gate] = now;
+    }
     transport_.publish(cfg_.liveSubject, buildLiveMessage(gate, img));
 }
 

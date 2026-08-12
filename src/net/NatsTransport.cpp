@@ -154,10 +154,15 @@ struct NatsTransport::Impl {
             ParsedMsg pm = parseEnvelope(raw);
             if (pm.subject.empty()) { LOGW() << "NatsTransport: sender dropped malformed envelope"; continue; }
 
+            // The live view is a high-frequency per-frame UI stream; logging every send
+            // floods the log and hides the useful lines. Stay quiet for it (successes);
+            // failures below still log. Other subjects (plates, commands) log as before.
+            const bool quiet = (pm.subject == "socketio.live");
             const bool dis = disconnected.load();
-            LOGI() << "NatsTransport: sender dequeued subject='" << pm.subject << "' bytes=" << pm.payload.size()
-                   << " jetstream=" << (pm.jetstream ? 1 : 0) << " durable=" << (pm.durable ? 1 : 0)
-                   << " disconnected=" << (dis ? 1 : 0) << " conn=" << (conn ? 1 : 0);
+            if (!quiet)
+                LOGI() << "NatsTransport: sender dequeued subject='" << pm.subject << "' bytes=" << pm.payload.size()
+                       << " jetstream=" << (pm.jetstream ? 1 : 0) << " durable=" << (pm.durable ? 1 : 0)
+                       << " disconnected=" << (dis ? 1 : 0) << " conn=" << (conn ? 1 : 0);
 
             if (dis || !conn) {
                 LOGW() << "NatsTransport: offline, holding subject='" << pm.subject << "'";
@@ -188,7 +193,8 @@ struct NatsTransport::Impl {
             } else {
                 // Everything else -> core publish + flush (NOT JetStream).
                 s = natsConnection_PublishString(conn, pm.subject.c_str(), pm.payload.c_str());
-                LOGI() << "NatsTransport: PublishString('" << pm.subject << "') -> " << natsStatus_GetText(s);
+                if (!quiet || s != NATS_OK)
+                    LOGI() << "NatsTransport: PublishString('" << pm.subject << "') -> " << natsStatus_GetText(s);
                 if (s == NATS_OK) {
                     natsStatus f = natsConnection_FlushTimeout(conn, 5000);
                     if (f != NATS_OK) LOGW() << "NatsTransport: Flush('" << pm.subject << "') -> " << natsStatus_GetText(f);

@@ -94,6 +94,8 @@ private:
     Config             cfg_;
     mutable std::mutex liveSerialMtx_;
     std::map<std::string, std::string> liveSerial_;   // gate -> serial (manual control only)
+    std::mutex                  liveLogMtx_;
+    std::map<std::string, long> liveLastMs_;          // gate -> last live-frame ms (start/gap logging)
 };
 
 } // namespace lpr
