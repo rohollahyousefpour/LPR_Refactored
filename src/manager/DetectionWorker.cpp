@@ -5,6 +5,7 @@
 #include "lpr/util/Uuid.h"
 #include "lpr/util/JaroWinkler.h"
 
+#include <nlohmann/json.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <chrono>
@@ -299,16 +300,35 @@ void DetectionWorker::process(FrameItem& item) {
             // evidence that drove it (plate size, how many sightings accumulated,
             // whether the trend is locked) so a wrong enter/exit is debuggable.
             auto lit = lastLoggedDir_.find(item.gate);
-            const char* kind = (lit == lastLoggedDir_.end()) ? "announce"
-                             : (lit->second != direction ? "CORRECTION(flip)" : "reaffirm");
+            const bool isFirst = (lit == lastLoggedDir_.end());
+            const bool isFlip  = (!isFirst && lit->second != direction);
+            const char* kind = isFirst ? "announce" : (isFlip ? "CORRECTION(flip)" : "reaffirm");
             lastLoggedDir_[item.gate] = direction;
+            const int sightings = dir_.sightingCount(item.gate);
+            const bool locked = dir_.isLocked(item.gate);
             LOGI() << "DetectionWorker[" << item.gate << "]: " << best->text << " " << kind << " "
                    << (event == DirectionEstimator::Approaching ? "approaching" : "receding")
                    << " -> " << (direction == 1 ? "ENTER" : "EXIT")
                    << " size=" << (long)std::lround(bestSz)
-                   << " sightings=" << dir_.sightingCount(item.gate)
-                   << " locked=" << (dir_.isLocked(item.gate) ? 1 : 0)
+                   << " sightings=" << sightings
+                   << " locked=" << (locked ? 1 : 0)
                    << " (Entry_Exit polarity approach=" << (approachEnter ? "enter" : "exit") << ")";
+            // Publish a diagnostic ONLY on a real direction flip (a corrected
+            // enter/exit) — the notable case worth surfacing in the panel. Best-
+            // effort: the diag sink core-publishes to messages.module_diag.
+            if (diag_ && isFlip) {
+                nlohmann::json j = {
+                    {"kind", "direction"}, {"event", "flip"},
+                    {"gate", item.gate}, {"plate", best->text},
+                    {"direction", direction == 1 ? "ENTER" : "EXIT"},
+                    {"trend", event == DirectionEstimator::Approaching ? "approaching" : "receding"},
+                    {"size", (long)std::lround(bestSz)},
+                    {"sightings", sightings}, {"locked", locked},
+                    {"message", best->text + std::string(" جهت اصلاح شد -> ") + (direction == 1 ? "ENTER" : "EXIT")},
+                };
+                if (best->trackId >= 0) j["track_id"] = std::to_string(best->trackId);
+                diag_(j.dump());
+            }
         }
     }
 

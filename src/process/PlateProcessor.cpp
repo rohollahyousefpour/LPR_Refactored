@@ -2,6 +2,8 @@
 #include "lpr/util/JaroWinkler.h"
 #include "lpr/Log.h"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
@@ -115,10 +117,24 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     out.gate = plate.gate;
     // Trace the vote so a wrong emitted plate is debuggable: the chosen consensus,
     // the single highest-confidence read it may have overridden, and the vote count.
+    const bool overrode = (out.text != tr.best.text);
     LOGD() << "PlateProcessor[" << out.gate << "]: emit '" << out.text << "' (consensus='"
            << tr.consensus << "' best='" << tr.best.text << "' conf=" << tr.best.confidence
            << " votes=" << tr.reads.size()
-           << (out.text != tr.best.text ? " vote-overrode-best)" : ")");
+           << (overrode ? " vote-overrode-best)" : ")");
+    // Diagnostic ONLY when the vote overrode the highest-confidence single read —
+    // the notable case where consensus corrected a misread. Best-effort publish.
+    if (cfg_.diag && overrode) {
+        nlohmann::json j = {
+            {"kind", "plate"}, {"event", "consensus_override"},
+            {"gate", out.gate}, {"plate", out.text},
+            {"best", tr.best.text}, {"votes", (int)tr.reads.size()},
+            {"conf", tr.best.confidence},
+            {"message", std::string("رأی consensus '") + out.text + "' بر بهترین تک‌فریم '" + tr.best.text + "' غالب شد"},
+        };
+        if (plate.trackId >= 0) j["track_id"] = std::to_string(plate.trackId);
+        cfg_.diag(j.dump());
+    }
     return out;
 }
 

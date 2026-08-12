@@ -474,6 +474,8 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         ppcfg.minConfidence       = sm.getLpr<float>("ocr_prob").value_or(ppcfg.minConfidence);
         ppcfg.passGapMs           = sm.getLpr<int>("plate_pass_gap_ms").value_or(static_cast<int>(ppcfg.passGapMs));
     }
+    // Publish notable OCR-consensus overrides as module-diag events (best-effort).
+    ppcfg.diag = [this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); };
     processor_ = std::make_unique<PlateProcessor>(ppcfg);
     LOGI() << "Application: plate processor minVotes=" << ppcfg.minVotes
            << " similarity=" << ppcfg.similarityThreshold << " minConf=" << ppcfg.minConfidence
@@ -592,6 +594,8 @@ void Application::bootstrapFromJson(const json& settingsBody) {
             catch (...) { return std::vector<cv::Point>{}; }
         });
     worker_->setPlateProcessor(processor_->asProcessor());
+    // Publish notable direction FLIPS as module-diag events (best-effort).
+    worker_->setDiagSink([this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); });
     worker_->setPlateSink(sender_->asSink());
     worker_->addFrameObserver([this](const FrameItem& f) {
         // While recording, burn the PC date/time + latest plate boxes into the recorded frame

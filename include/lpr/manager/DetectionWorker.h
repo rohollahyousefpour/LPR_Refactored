@@ -49,6 +49,9 @@ public:
     using PlateFilter   = std::function<bool(const PlateResult&)>;
     // Optional: returns the recognition polygon (full-frame px) for a gate, for debug drawing.
     using RoiPolygonProvider = std::function<std::vector<cv::Point>(const std::string& gate, int w, int h)>;
+    // Optional: publish a diagnostic JSON (to messages.module_diag) on a notable
+    // decision — a direction flip. Best-effort; wired to the NATS transport.
+    using DiagSink = std::function<void(std::string)>;
 
     struct Config {
         int popTimeoutMs = 200;   // how often the loop re-checks running_
@@ -84,6 +87,7 @@ public:
     void setPlateQueue(std::shared_ptr<PlateQueue> q);     // sink that pushes to q
     void setPlateProcessor(PlateProcessor proc) { processor_ = std::move(proc); }
     void setRoiPolygonProvider(RoiPolygonProvider p) { roiPolygon_ = std::move(p); }
+    void setDiagSink(DiagSink d) { diag_ = std::move(d); }
     // Publish detection annotations here so the (continuously-fed) live stream can draw them.
     void setLiveOverlay(LiveOverlay* o) { overlay_ = o; }
     void setPlateFilter(PlateFilter f);                    // bool predicate -> processor
@@ -121,6 +125,7 @@ private:
     PlateSink                    sink_;
     PlateProcessor               processor_;
     RoiPolygonProvider           roiPolygon_;
+    DiagSink                     diag_;                // optional module-diag publisher
     LiveOverlay*                 overlay_ = nullptr;   // not owned
     DirectionEstimator           dir_;                 // enter/exit from plate growth
     std::vector<FrameObserver>   observers_;

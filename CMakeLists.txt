@@ -320,7 +320,7 @@ if(OpenCV_FOUND)
   # ---- plate processing (validation + per-track consensus + send-once dedup) ----
   add_library(lpr_process STATIC src/process/PlateProcessor.cpp src/process/DirectionEstimator.cpp)
   target_include_directories(lpr_process PUBLIC include ${OpenCV_INCLUDE_DIRS})
-  target_link_libraries(lpr_process PUBLIC lpr_core lpr_detect ${OpenCV_LIBS})
+  target_link_libraries(lpr_process PUBLIC lpr_core lpr_detect lpr_json ${OpenCV_LIBS})
   message(STATUS "  + plate processing: PlateProcessor")
 
   # ---- services (recording, live view, command routing) ----

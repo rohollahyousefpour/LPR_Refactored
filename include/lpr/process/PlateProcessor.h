@@ -39,6 +39,10 @@ struct PlateProcessorConfig {
     long   passGapMs           = 1500;        // a gap longer than this ends a car's "pass"; a
                                               // later similar read starts a NEW pass (re-sends),
                                               // and a new car can't be absorbed into an old pass
+    // Optional: publish a diagnostic JSON (to messages.module_diag) when the
+    // accuracy-weighted consensus OVERRODE the single highest-confidence read —
+    // the notable "the vote saved us from a misread" case. Best-effort.
+    std::function<void(std::string)> diag;
 };
 
 class PlateProcessor {
