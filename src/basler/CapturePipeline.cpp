@@ -47,7 +47,7 @@ void CapturePipeline::run() {
     // (no reconnect); when the link is clean again, ease it back up toward the
     // connect-time cap. Triggered slaves are skipped (their rate is the master's
     // trigger). All knobs are settings-tunable.
-    struct Adapt { double ceil = 0, cur = 0; int grabs = 0, bad = 0; long lastStepMs = 0;
+    struct Adapt { double ceil = 0, cur = 0; int grabs = 0, bad = 0; long long lastStepMs = 0;
                    bool inited = false, skip = false; };
     std::unordered_map<std::string, Adapt> adapt;
     bool adaptEnabled = true; int adaptWindow = 150; GigeAdaptCfg acfg;
@@ -66,7 +66,7 @@ void CapturePipeline::run() {
                << "fps recover=" << (acfg.recoverMs / 1000) << "s)";
     }
     const auto nowMs = [] {
-        return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+        return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::steady_clock::now().time_since_epoch()).count();
     };
     auto adaptRate = [&](const std::string& serial, CameraDevice& dev, CameraDevice::GrabStatus st) {
@@ -88,7 +88,7 @@ void CapturePipeline::run() {
         if (st == CameraDevice::GrabStatus::BadFrame || st == CameraDevice::GrabStatus::Timeout) ++a.bad;
         if (a.grabs < adaptWindow) return;
         const double lossPct = 100.0 * (double)a.bad / (double)a.grabs;
-        const long now = nowMs();
+        const long long now = nowMs();
         const GigeAdaptDecision d = gigeAdaptDecide(a.cur, a.ceil, a.lastStepMs, lossPct, now, acfg);
         if (d.action != GigeAdaptAction::None && dev.setAcquisitionFrameRate(d.newFps)) {
             if (d.action == GigeAdaptAction::Throttle)

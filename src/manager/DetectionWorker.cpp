@@ -103,7 +103,8 @@ std::string DetectionWorker::passIdFor(const std::string& gate, const std::strin
         st.emittedEarly = false;
         st.lastSentDir = -1;
     }
-    st.text = text;            // track the latest read as the pass's reference plate
+    if (!text.empty()) st.text = text;   // keep the reference; an empty (no-OCR) frame must
+                                         // NOT erase it or the next differentPlate check fails
     st.lastSeenMs = nowMs;
     return st.passId;
 }
@@ -300,7 +301,6 @@ void DetectionWorker::process(FrameItem& item) {
     // plate-facing camera). Feed every raw detection once per frame; tag emitted plates with
     // the committed direction. Uses a steady-clock ms timestamp so gap/cooldown are wall-time.
     const long nowMs = nowSteadyMs();
-    std::map<std::string, int> dirByText;
     if (cfg_.directionEnable && !results.empty()) {
         // Per-camera polarity: does a plate approaching the camera mean ENTER? (Entry_Exit=0)
         const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(item.gate) : true;
@@ -321,7 +321,6 @@ void DetectionWorker::process(FrameItem& item) {
         int direction = 0;   // 0 unknown, 1 enter, 2 exit
         if (standing == DirectionEstimator::Approaching) direction = approachEnter ? 1 : 2;
         else if (standing == DirectionEstimator::Receding) direction = approachEnter ? 2 : 1;
-        for (const PlateResult& r : results) if (!r.text.empty()) dirByText[r.text] = direction;
         if (event != DirectionEstimator::Unknown && best)   // fire the enter/exit log on announce/correction
             LOGI() << "DetectionWorker[" << item.gate << "]: " << best->text << " "
                    << (event == DirectionEstimator::Approaching ? "approaching" : "receding")

@@ -45,7 +45,13 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
 
     if (t.locked) return Unknown;                        // finalized this pass -> no repeat events
 
-    if (sizePx > 0) { t.sizes.push_back(sizePx); t.ys.push_back(yCenterPx); }
+    if (sizePx > 0) {
+        t.sizes.push_back(sizePx); t.ys.push_back(yCenterPx);
+        // Bound memory for a vehicle idling in view with no gap reset. Drop the oldest;
+        // the trend baseline stays wide (kMaxSamples/4 at each end via trendWindow).
+        constexpr size_t kMaxSamples = 600;
+        if (t.sizes.size() > kMaxSamples) { t.sizes.pop_front(); t.ys.pop_front(); }
+    }
     if ((int)t.sizes.size() < cfg_.minSightings) return Unknown;
 
     const double s0 = avgFirst(t.sizes), s1 = avgLast(t.sizes);
@@ -78,11 +84,22 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
     // as a backstop once confirmSightings total reads accumulate (a persistently unstable
     // pass still ends). Until then it keeps refining, correcting the early guess.
     if (dir == t.pendingDir) ++t.agree; else { t.pendingDir = dir; t.agree = 1; }
-    if (t.agree >= cfg_.confirmAgreeing || (int)t.sizes.size() >= cfg_.confirmSightings) {
+    if (t.agree >= cfg_.confirmAgreeing) {
+        // A confirmed streak wins and locks.
         t.locked = true; t.decidedTs = tsMs;
+        if (dir != t.reported) { t.reported = dir; return dir; }
+        return Unknown;
+    }
+    if ((int)t.sizes.size() >= cfg_.confirmSightings) {
+        // Backstop cap: finalize on the already-reported STANDING decision if one exists —
+        // a single late outlier that never formed a streak must NOT win. Only adopt the
+        // current dir if nothing was ever reported this pass.
+        t.locked = true; t.decidedTs = tsMs;
+        if (t.reported != Unknown) return Unknown;
+        t.reported = dir; return dir;
     }
 
-    if (dir != t.reported) { t.reported = dir; return dir; }   // first announce OR a correction
+    if (dir != t.reported) { t.reported = dir; return dir; }   // still refining -> correction
     return Unknown;                                            // unchanged this pass -> no event
 }
 

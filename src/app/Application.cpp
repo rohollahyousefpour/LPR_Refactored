@@ -565,6 +565,10 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         // (so the backend merges early + correction); a clearly different plate starts
         // a new pass. Reuses the OCR consensus threshold, floored a little lower.
         dwcfg.passPlateSimilarity      = std::min(0.95, (double)sm.getLpr<float>("plate_similarity").value_or(0.90f) - 0.05);
+        // Keep the DetectionWorker's pass-gap IN SYNC with the estimator's track gap, so a
+        // quiet gap resets BOTH the passId state and the direction track together (otherwise
+        // one restarts while the other keeps stale state -> merged/flipped passages).
+        dwcfg.passGapMs                = dwcfg.direction.trackGapMs;
         // How long to hold a plate waiting for its enter/exit decision before sending it anyway.
         // The processor emits a pass on its first read, but the decision needs several sightings;
         // holding lets the sent message carry a real ENTER/EXIT instead of 0/unknown. 0 = send

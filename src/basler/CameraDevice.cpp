@@ -88,8 +88,12 @@ CameraDevice::GrabStatus CameraDevice::retrieveBGR(cv::Mat& out, bool& isColor, 
             // Non-fatal: fall through to RetrieveResult (covers models without these nodes).
         }
 
-        const auto fmt = cam_->PixelFormat.GetValue();
-        isColor = (fmt != Basler_UniversalCameraParams::PixelFormat_Mono8);
+        // Guard + cache: a transient unreadable PixelFormat must NOT throw here (it would
+        // map to DeviceError and force an immediate reconnect). Update the cache only when
+        // readable; reuse the last value otherwise (the format doesn't change mid-session).
+        if (cam_->PixelFormat.IsReadable())
+            lastIsColor_ = (cam_->PixelFormat.GetValue() != Basler_UniversalCameraParams::PixelFormat_Mono8);
+        isColor = lastIsColor_;
 
         Pylon::CGrabResultPtr res;
         if (!cam_->RetrieveResult(timeoutMs, res, Pylon::TimeoutHandling_Return))

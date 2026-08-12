@@ -101,11 +101,15 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     if (tr.sent) return std::nullopt;
 
     tr.sent = true;
-    tr.lastSent = tr.best.text;
+    tr.lastSent = tr.consensus;
 
-    PlateResult out = tr.best;        // highest-confidence sample: image / box / coords ...
-    out.text = tr.best.text;          // ... and its ACTUAL text (never a synthesized consensus
-                                      // string the camera never read - that caused 15v91611).
+    PlateResult out = tr.best;        // best-quality sample: image / box / coords / confidence
+    // Send the accuracy-WEIGHTED vote across the pass's reads, not the single
+    // highest-confidence frame — one over-confident misread must not override an agreeing
+    // majority. weightedConsensus sums confidence per DISTINCT full text and returns the
+    // top one, so it is always a text a frame actually produced (never a synthesized/
+    // character-merged string), keeping the crop consistent with the sent number.
+    out.text = tr.consensus.empty() ? tr.best.text : tr.consensus;
     out.trackId = plate.trackId;
     out.gate = plate.gate;
     return out;

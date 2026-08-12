@@ -126,6 +126,36 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
                    << ": " << e.GetDescription();
         }
 
+        // 3c) If the operator was mid manual-tuning when the camera dropped, apply the
+        //     override to THIS device NOW (before it is published) and hold it. Doing it
+        //     here — on the reconnect thread but on a not-yet-shared device — avoids the
+        //     old post-publish reapply that mutated already-published exposure/nodes and
+        //     could race the capture thread (use-after-free + concurrent Pylon access).
+        {
+            ManualOverride ov; bool have = false;
+            { std::lock_guard<std::mutex> mk(manualMutex_);
+              auto it = manual_.find(serial);
+              if (it != manual_.end() && (it->second.hasExp || it->second.hasGain)) { ov = it->second; have = true; } }
+            if (have) {
+                double cap = prof.exposureLimits.maxExposureUs > 0
+                             ? double(prof.exposureLimits.maxExposureUs) : 50000.0;
+                if (ov.hasExp) {
+                    const bool abs = (ov.expUnit == ExposureUnit::Absolute) ||
+                                     (ov.expUnit == ExposureUnit::Auto && ov.exp > 1.0);
+                    if (abs) ManualExposureStrategy::setExposureUs(*device, ov.exp, std::numeric_limits<double>::max());
+                    else     ManualExposureStrategy::setNormalizedExposure(*device, ov.exp, cap);
+                }
+                if (ov.hasGain) {
+                    const bool abs = (ov.gainUnit == ExposureUnit::Absolute) ||
+                                     (ov.gainUnit == ExposureUnit::Auto && ov.gain > 1.0);
+                    if (abs) ManualExposureStrategy::setGainAbs(*device, ov.gain);
+                    else     ManualExposureStrategy::setNormalizedGain(*device, ov.gain);
+                }
+                exp = std::make_unique<ManualExposureStrategy>();   // hold, suspend the auto loop
+                LOGI() << "[exposure][" << serial << "] manual override re-applied at (re)connect";
+            }
+        }
+
         // 4) Store everything under the map lock (insertion is the only thing
         //    that happens off the capture thread).
         {
@@ -137,10 +167,6 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
 
         // 5) Reset backoff for this serial.
         { std::lock_guard<std::mutex> lk(reconMutex_); attempts_[serial] = 0; }
-
-        // 6) If the operator was mid manual-tuning when the camera dropped, restore the
-        //    manual exposure/gain instead of leaving it on the freshly-built auto strategy.
-        reapplyManualIfAny(serial);
 
         LOGI() << "[supervisor] connected " << serial;
         return true;
@@ -244,18 +270,6 @@ void ConnectionSupervisor::setManualGain(const std::string& serial, double value
     ctx_.exposure[serial] = std::make_unique<ManualExposureStrategy>();  // suspend auto loop
     LOGI() << "[exposure][" << serial << "] MANUAL gain "
            << (absolute ? "abs=" : "norm=") << value << " (auto suspended)";
-}
-
-void ConnectionSupervisor::reapplyManualIfAny(const std::string& serial) {
-    ManualOverride ov;
-    { std::lock_guard<std::mutex> mk(manualMutex_);
-      auto it = manual_.find(serial);
-      if (it == manual_.end() || (!it->second.hasExp && !it->second.hasGain)) return;
-      ov = it->second; }
-    LOGI() << "[exposure][" << serial << "] re-applying manual override after reconnect";
-    // setManual* re-take their own locks and re-record the (unchanged) override.
-    if (ov.hasExp)  setManualExposure(serial, ov.exp, ov.expUnit);
-    if (ov.hasGain) setManualGain(serial, ov.gain, ov.gainUnit);
 }
 
 void ConnectionSupervisor::revertToSettings(const std::string& serial) {
@@ -362,7 +376,13 @@ void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {
         return;
     }
     try {
-        auto align = [](int v, int mn, int inc) { return inc > 0 ? mn + ((v - mn) / inc) * inc : v; };
+        // Round DOWN to the nearest valid increment at/above the node minimum. For an
+        // input below min (e.g. offset 0 with min 16) integer truncation would yield a
+        // value < min and SetValue would throw — so clamp the result up to min.
+        auto align = [](int v, int mn, int inc) {
+            const int a = inc > 0 ? mn + ((v - mn) / inc) * inc : v;
+            return a < mn ? mn : a;
+        };
         if (c->Width.IsWritable())
             c->Width.SetValue(align(p.w, (int)c->Width.GetMin(), (int)c->Width.GetInc()));
         if (c->Height.IsWritable())
@@ -404,7 +424,13 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof
         // Index is stable per serial across reconnects.
         int num_cam = SettingsManager::instance().get_num_camera();
         if (num_cam <= 0) num_cam = std::max(1, coord.countInGroup(nic));
-        const int idx = std::clamp(coord.registerCamera(serial, nic), 0, num_cam - 1);
+        // Stagger index must be bounded by the count ON THIS NIC (registerCamera hands out
+        // per-NIC indices), NOT the global camera total — otherwise, if a NIC holds more
+        // cameras than the configured global count, two per-NIC indices clamp to the same
+        // value and get an identical GevSCFTD offset, defeating the stagger. (The divisor
+        // stays the global total: conservative — never under-throttles a shared NIC.)
+        const int nicCount = std::max(1, coord.countInGroup(nic));
+        const int idx = std::clamp(coord.registerCamera(serial, nic), 0, nicCount - 1);
 
         LOGI() << "[supervisor][bw][" << serial << "] start, num_cam=" << num_cam
                << " idx=" << idx << " nic=" << nic;

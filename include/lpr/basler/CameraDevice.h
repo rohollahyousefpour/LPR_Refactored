@@ -79,4 +79,5 @@ private:
     std::string                  serial_;
     std::shared_ptr<PylonCamera> cam_;
     Pylon::CImageFormatConverter converter_;
+    bool                         lastIsColor_ = false;   // cached PixelFormat colorness
 };

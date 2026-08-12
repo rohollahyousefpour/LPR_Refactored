@@ -17,7 +17,7 @@ struct GigeAdaptCfg {
     double downF     = 0.75;   // throttle-down step multiplier
     double upF       = 1.15;   // recovery step multiplier
     double minFps    = 1.0;    // floor
-    long   recoverMs = 15000;  // clean time before a recovery step
+    long long recoverMs = 15000;  // clean time before a recovery step
 };
 
 enum class GigeAdaptAction { None, Throttle, Recover };
@@ -29,8 +29,8 @@ struct GigeAdaptDecision {
 
 // `cur` = current fps, `ceil` = connect-time cap, `lastStepMs` = when the last step
 // was applied, `lossPct` = measured loss over the window, `nowMs` = steady clock ms.
-inline GigeAdaptDecision gigeAdaptDecide(double cur, double ceil, long lastStepMs,
-                                         double lossPct, long nowMs, const GigeAdaptCfg& c) {
+inline GigeAdaptDecision gigeAdaptDecide(double cur, double ceil, long long lastStepMs,
+                                         double lossPct, long long nowMs, const GigeAdaptCfg& c) {
     if (lossPct >= c.downPct && cur > c.minFps)
         return { GigeAdaptAction::Throttle, std::max(c.minFps, cur * c.downF) };
     if (lossPct <= c.upPct && cur < ceil && (nowMs - lastStepMs) >= c.recoverMs)

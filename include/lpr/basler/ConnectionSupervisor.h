@@ -82,7 +82,6 @@ private:
     // Re-apply a live manual-control override (exposure/gain) after a reconnect, so a
     // camera blip mid-tuning doesn't silently drop back to auto. No-op if the serial
     // has no active manual override.
-    void reapplyManualIfAny(const std::string& serial);
 
     CameraContext& ctx_;
 
