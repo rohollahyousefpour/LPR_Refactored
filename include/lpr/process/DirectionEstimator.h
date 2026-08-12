@@ -71,6 +71,7 @@ private:
         std::deque<double> sizes;
         std::deque<double> ys;
         long lastTs    = 0;
+        long lastInterval = 0;      // recent inter-sighting gap (for cadence-aware reset)
         int  reported  = Unknown;   // last direction emitted this pass (refined over sightings)
         int  pendingDir = Unknown;  // direction of the current agreement streak
         int  agree     = 0;         // consecutive images agreeing on pendingDir

@@ -569,11 +569,6 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         // quiet gap resets BOTH the passId state and the direction track together (otherwise
         // one restarts while the other keeps stale state -> merged/flipped passages).
         dwcfg.passGapMs                = dwcfg.direction.trackGapMs;
-        // How long to hold a plate waiting for its enter/exit decision before sending it anyway.
-        // The processor emits a pass on its first read, but the decision needs several sightings;
-        // holding lets the sent message carry a real ENTER/EXIT instead of 0/unknown. 0 = send
-        // immediately (old behaviour). Default 1500ms (~ one pass) is plenty at normal fps.
-        dwcfg.directionHoldMs          = (long)sm.getLpr<int>("direction_hold_ms").value_or(1500);
         dwcfg.approachingIsEnter = [](const std::string& gate) -> bool {
             try {
                 return SettingsManager::instance()
@@ -583,8 +578,7 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         };
         if (dwcfg.directionEnable)
             LOGI() << "Application: direction (enter/exit) ON minSightings=" << dwcfg.direction.minSightings
-                   << " growth=" << dwcfg.direction.minGrowthRatio
-                   << " holdMs=" << dwcfg.directionHoldMs;
+                   << " growth=" << dwcfg.direction.minGrowthRatio;
     }
     if (dwcfg.showLive) LOGI() << "Application: show_live enabled (preview window per camera, scale=" << dwcfg.liveScale << ")";
     worker_ = std::make_unique<DetectionWorker>(frames_, *topRecognizer_, dwcfg);

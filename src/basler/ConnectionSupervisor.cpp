@@ -487,6 +487,22 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof
                             ? (double)c->GevTimestampTickFrequency.GetValue() : 0.0;
         const int64_t scpdFloor = sm.getLpr<int>("gige_scpd_floor").value_or(2000);
 
+        // Target frame-rate cap (what step 7 applies). Computed HERE from the link/N budget
+        // and PayloadSize so the SCFTD stagger below is sized for the REAL (capped) frame
+        // period, not the uncapped sensor rate. GevSCBWA isn't valid yet (SCPD/reserve set
+        // below), so the link/N budget is used — the same value the fps cap falls back to.
+        double capTargetFps = 0.0;
+        {
+            const int64_t payloadEarly = c->PayloadSize.IsReadable() ? c->PayloadSize.GetValue() : 0;
+            const double  budgetEarly  = linkBytesPerSec / (double)num_cam;
+            if (payloadEarly > 0 && budgetEarly > 0.0) {
+                const int safetyPct = std::clamp<int>(sm.getLpr<int>("gige_fps_safety_pct").value_or(85), 10, 100);
+                const int userCap   = sm.getLpr<int>("gige_frame_rate_cap").value_or(0);
+                capTargetFps = (budgetEarly / (double)payloadEarly) * ((double)safetyPct / 100.0);
+                if (userCap > 0) capTargetFps = std::min(capTargetFps, (double)userCap);
+            }
+        }
+
         // 3) Inter-packet delay (GevSCPD): stretch each camera to ~link/N so the N
         //    cameras' summed throughput fits the pipe. Delay per packet (seconds) =
         //    packetTxTime * (N-1), where packetTxTime = slotBytes / linkBytesPerSec.
@@ -518,9 +534,13 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof
         //    offset = idx * (framePeriod / N), in ticks. Needs fps + tick freq;
         //    falls back to the byte heuristic otherwise.
         if (c->GevSCFTD.IsWritable()) {
-            double fps = 0.0;
-            if      (c->AcquisitionFrameRate.IsReadable())    fps = c->AcquisitionFrameRate.GetValue();
-            else if (c->AcquisitionFrameRateAbs.IsReadable()) fps = c->AcquisitionFrameRateAbs.GetValue();
+            // Use the INTENDED capped rate (what step 7 applies) so the stagger matches the
+            // real frame period; fall back to the current sensor rate only if unknown.
+            double fps = capTargetFps;
+            if (fps <= 0.1) {
+                if      (c->AcquisitionFrameRate.IsReadable())    fps = c->AcquisitionFrameRate.GetValue();
+                else if (c->AcquisitionFrameRateAbs.IsReadable()) fps = c->AcquisitionFrameRateAbs.GetValue();
+            }
             int64_t scftd;
             if (tickHz > 0.0 && fps > 0.1) {
                 const double framePeriodSec = 1.0 / fps;

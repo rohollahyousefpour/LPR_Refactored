@@ -37,10 +37,20 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
 
     // Start a fresh pass if the plate has been gone a while, or a FINALIZED decision's
     // cooldown has elapsed (so the same plate driving back out later is judged afresh).
-    if (t.lastTs != 0 && tsMs - t.lastTs > cfg_.trackGapMs)
-        t = Track{};
-    else if (t.locked && tsMs - t.decidedTs > cfg_.cooldownMs)
-        t = Track{};
+    // Cadence-aware "new pass" reset: a real gap must exceed the configured trackGapMs
+    // AND be well beyond the recent inter-sighting interval — so a genuinely SLOW
+    // detection cadence (interval > trackGapMs) does NOT reset the track on every frame
+    // (which would leave it stuck at «unknown» forever). The cooldown reset is separate.
+    bool reset = false;
+    if (t.lastTs != 0) {
+        const long gap = tsMs - t.lastTs;
+        const long hardGap = 4 * (long)cfg_.trackGapMs;   // beyond ANY cadence -> new pass
+        if (gap > hardGap) reset = true;
+        else if (t.lastInterval > 0 && gap > 3 * t.lastInterval) reset = true;
+        else t.lastInterval = gap;   // first gap (or in-cadence) -> learn it, don't reset
+    }
+    if (!reset && t.locked && tsMs - t.decidedTs > cfg_.cooldownMs) reset = true;
+    if (reset) t = Track{};
     t.lastTs = tsMs;
 
     if (t.locked) return Unknown;                        // finalized this pass -> no repeat events

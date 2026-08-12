@@ -48,13 +48,11 @@ void DetectionWorker::run() {
     while (running_) {
         auto item = input_->popFor(std::chrono::milliseconds(cfg_.popTimeoutMs));
         if (!item) {
-            releasePending(nowSteadyMs());                      // age out held plates during a lull
             if (input_->isClosed() && input_->empty()) break;   // drained + closed -> exit
             continue;                                           // timeout -> re-check running_
         }
         process(*item);
     }
-    flushPending();   // send anything still held so a plate isn't lost on shutdown
     LOGI() << "DetectionWorker: stopped (frames=" << framesProcessed_
            << ", plates=" << platesEmitted_ << ")";
 }
@@ -62,16 +60,6 @@ void DetectionWorker::run() {
 long DetectionWorker::nowSteadyMs() {
     return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-// Standing enter/exit for a plate: the estimator's committed physical trend mapped through the
-// per-camera Entry_Exit polarity. 0 = unknown/undecided, 1 = enter, 2 = exit.
-int DetectionWorker::directionFor(const std::string& gate, const std::string& /*text*/) {
-    const int trend = dir_.current(gate);   // one pass per gate: OCR flicker keeps ONE track
-    if (trend == DirectionEstimator::Unknown) return 0;
-    const bool approachEnter = cfg_.approachingIsEnter ? cfg_.approachingIsEnter(gate) : true;
-    if (trend == DirectionEstimator::Approaching) return approachEnter ? 1 : 2;
-    return approachEnter ? 2 : 1;   // Receding
 }
 
 // PHYSICAL size-trend only (no per-camera polarity): 0 unknown, 1 approaching
@@ -95,13 +83,25 @@ std::string DetectionWorker::passIdFor(const std::string& gate, const std::strin
         if (nowMs - it->second.lastSeenMs > 5L * 60 * 1000) it = passes_.erase(it); else ++it;
     }
     PassState& st = passes_[gate];
-    const bool fresh = st.passId.empty() || (nowMs - st.lastSeenMs) > cfg_.passGapMs;
+    // Cadence-aware gap: a real "vehicle left" gap must exceed passGapMs AND be well
+    // beyond the recent inter-sighting interval, so a SLOW detection cadence (interval
+    // > passGapMs) doesn't mint a new passId every frame — which would stop the backend
+    // from merging the early event with its correction.
+    bool fresh = st.passId.empty();
+    if (!fresh) {
+        const long gap = nowMs - st.lastSeenMs;
+        const long hardGap = 4 * cfg_.passGapMs;          // beyond ANY cadence -> new pass
+        if (gap > hardGap) fresh = true;
+        else if (st.lastInterval > 0 && gap > 3 * st.lastInterval) fresh = true;
+        else st.lastInterval = gap;   // first gap (or in-cadence) -> learn it, don't reset
+    }
     const bool differentPlate = !fresh && !st.text.empty() && !text.empty() &&
         jaroWinklerDistance(st.text, text) < cfg_.passPlateSimilarity;
     if (fresh || differentPlate) {
         st.passId = generateUuidV4();
         st.emittedEarly = false;
         st.lastSentDir = -1;
+        st.lastInterval = 0;
     }
     if (!text.empty()) st.text = text;   // keep the reference; an empty (no-OCR) frame must
                                          // NOT erase it or the next differentPlate check fails
@@ -112,33 +112,6 @@ std::string DetectionWorker::passIdFor(const std::string& gate, const std::strin
 void DetectionWorker::emitPlate(PlateItem&& out) {
     ++platesEmitted_;
     if (sink_) sink_(std::move(out));
-}
-
-// Send held plates whose direction has since committed, or that have waited past directionHoldMs
-// (sent with whatever is known -- still 0/unknown for a plate seen too few times to decide).
-void DetectionWorker::releasePending(long nowMs) {
-    for (auto it = pending_.begin(); it != pending_.end();) {
-        const int  dir  = directionFor(it->gate, it->item.plate.text);
-        const bool aged = cfg_.directionHoldMs <= 0 || (nowMs - it->bufferedMs) >= cfg_.directionHoldMs;
-        if (dir != 0 || aged) {
-            if (it->item.plate.direction == 0 && dir != 0) it->item.plate.direction = dir;
-            if (it->item.plate.direction == 0)
-                LOGD() << "DetectionWorker[" << it->gate << "]: " << it->item.plate.text
-                       << " sent with UNKNOWN direction (hold window elapsed, too few sightings)";
-            emitPlate(std::move(it->item));
-            it = pending_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
-void DetectionWorker::flushPending() {
-    for (auto& pp : pending_) {
-        if (pp.item.plate.direction == 0) pp.item.plate.direction = directionFor(pp.gate, pp.item.plate.text);
-        emitPlate(std::move(pp.item));
-    }
-    pending_.clear();
 }
 
 void DetectionWorker::process(FrameItem& item) {

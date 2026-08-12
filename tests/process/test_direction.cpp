@@ -208,5 +208,24 @@ int main() {
         LPR_CHECK(d.current("g:MANYR") == DirectionEstimator::Receding);
     }
 
+    // ── Slow detection CADENCE (inter-sighting interval > trackGapMs): the pass must
+    // NOT reset on every frame; it accumulates and still decides. ──
+    {
+        DirectionEstimator::Config cc = cfg;   // trackGapMs = 3000
+        DirectionEstimator d(cc);
+        LPR_CHECK(d.update("g:CAD", 30, 100, 1000) == DirectionEstimator::Unknown);      // t=1s
+        LPR_CHECK(d.update("g:CAD", 40, 100, 5000) == DirectionEstimator::Unknown);      // t=5s (gap 4s > 3s)
+        LPR_CHECK(d.update("g:CAD", 55, 100, 9000) == DirectionEstimator::Approaching);  // t=9s -> decides
+    }
+    // A genuinely large gap (beyond any cadence, > 4*trackGapMs) DOES start a fresh pass.
+    {
+        DirectionEstimator::Config cc = cfg;
+        DirectionEstimator d(cc);
+        d.update("g:CADR", 30, 100, 1000);
+        d.update("g:CADR", 40, 100, 5000);
+        d.update("g:CADR", 55, 100, 9000);        // decided + learned 4s cadence
+        LPR_CHECK(d.update("g:CADR", 60, 100, 29000) == DirectionEstimator::Unknown);   // 20s gap -> new pass
+    }
+
     return LPR_TEST_RESULT();
 }
