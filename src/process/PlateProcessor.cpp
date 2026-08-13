@@ -24,7 +24,9 @@ bool checkPlate8(const std::string& s) {
 PlateProcessor::PlateProcessor(PlateProcessorConfig cfg) : cfg_(std::move(cfg)) {}
 
 std::string PlateProcessor::weightedConsensus(const std::vector<std::pair<std::string, double>>& reads) {
-    // Sum confidence per distinct text; the highest total wins (accuracy-weighted vote).
+    // Sum the per-read weight (confidence × plate size) per distinct text; the highest
+    // total wins — so an agreeing majority of large/clear reads beats a single misread,
+    // and larger (closer) plates pull the vote more than small/far ones.
     std::unordered_map<std::string, double> weight;
     for (const auto& r : reads) weight[r.first] += r.second;
     std::string best;
@@ -88,9 +90,15 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
         jaroWinklerDistance(plate.text, tr.consensus) < cfg_.similarityThreshold)
         return std::nullopt;
 
-    tr.reads.emplace_back(plate.text, static_cast<double>(plate.confidence));
+    // Weight each read by confidence × plate SIZE: the largest (closest) plate has the
+    // best resolution, so its reading is the most trustworthy. Size falls back to 1 when
+    // the box is absent (plate-only inputs), degrading to the plain confidence vote.
+    const double sz = std::max(1.0, static_cast<double>(plate.box.size.area()));
+    tr.reads.emplace_back(plate.text, static_cast<double>(plate.confidence) * sz);
     tr.lastUpdateMs = nowMs;
-    if (tr.reads.size() == 1 || plate.confidence >= tr.best.confidence) tr.best = plate;
+    // Keep the LARGEST-plate sample as `best` — its crop (highest resolution) is what
+    // gets stored/sent, and it is the text fallback when the vote is empty.
+    if (tr.reads.size() == 1 || sz > tr.bestSize) { tr.best = plate; tr.bestSize = sz; }
     tr.consensus = weightedConsensus(tr.reads);   // representative text for pass clustering only
 
     // Emit once a pass has the required evidence. minVotes defaults to 1, so a single-frame car is

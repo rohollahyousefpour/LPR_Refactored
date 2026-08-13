@@ -124,6 +124,29 @@ int main() {
         }
     }
 
+    // Largest-plate weighting: the reading from the BIGGEST (closest) plate — the
+    // best resolution, most reliable OCR — outweighs several small/far reads. Two
+    // small reads of "11A22233" then one LARGE read of "11A22238": by plain count the
+    // small pair would win, but weighted by plate SIZE the single large read wins, and
+    // its full-resolution crop is the one kept as `best`.
+    {
+        PlateProcessorConfig vc; vc.minVotes = 3;   // accumulate all three before emitting
+        PlateProcessor pv(vc);
+        auto sized = [](const std::string& t, float c, float w, float h, long ms) {
+            PlateResult p; p.text = t; p.confidence = c; p.trackId = -1; p.gate = "gs"; p.timestamp = ms;
+            p.box = cv::RotatedRect(cv::Point2f(0.f, 0.f), cv::Size2f(w, h), 0.f);
+            return p;
+        };
+        LPR_CHECK(!pv.process(sized("11A22233", 0.90f, 10, 10, 1000)).has_value());  // small, hold
+        LPR_CHECK(!pv.process(sized("11A22233", 0.90f, 10, 10, 1100)).has_value());  // small, hold
+        auto e = pv.process(sized("11A22238", 0.90f, 40, 40, 1200));                 // LARGE, emit
+        LPR_CHECK(e.has_value());
+        if (e) {
+            std::cout << "largest-plate emit: " << e->text << "\n";
+            LPR_CHECK(e->text == "11A22238");   // the big/closest plate's text wins
+        }
+    }
+
     if (LPR_TEST_RESULT() == 0) std::cout << "plate_processor: OK\n";
     return LPR_TEST_RESULT();
 }

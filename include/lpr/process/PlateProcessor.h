@@ -64,12 +64,15 @@ public:
 
 private:
     struct Track {
-        std::vector<std::pair<std::string, double>> reads;   // (text, confidence)
+        // (text, weight) where weight = confidence × plate-size — larger/closer plates
+        // (higher-resolution, more reliable OCR) count more toward the consensus vote.
+        std::vector<std::pair<std::string, double>> reads;
         std::string consensus;
         std::string lastSent;
         bool        sent = false;
         long        lastUpdateMs = 0;
-        PlateResult best;            // highest-confidence sample (for image/box/box coords)
+        PlateResult best;            // LARGEST (closest) plate sample — its crop is stored
+        double      bestSize = 0.0;  // area of `best`'s plate box, for the largest-plate pick
     };
 
     std::string resolveKey(const PlateResult& p, long nowMs);

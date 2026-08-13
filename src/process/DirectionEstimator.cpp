@@ -90,6 +90,32 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
         dir = (s1 > s0) ? Approaching : Receding;
     }
 
+    // Peak-position fallback: the first-vs-last averages can wash out a clear
+    // trajectory (e.g. a fast road pass caught over a few frames where the last
+    // window happens to dip). Decide instead from WHERE the LARGEST plate sits in
+    // the pass — still growing => peak LATE => approaching; already shrinking =>
+    // peak EARLY => receding. Uses ALL reads; guarded by a real size spread and a
+    // clearly off-centre peak so a flat/noisy or symmetric pass stays Unknown.
+    if (dir == Unknown && (int)t.sizes.size() >= cfg_.minSightings) {
+        size_t maxIdx = 0;
+        double mx = t.sizes[0], mn = t.sizes[0];
+        for (size_t i = 1; i < t.sizes.size(); ++i) {
+            if (t.sizes[i] > mx) { mx = t.sizes[i]; maxIdx = i; }
+            if (t.sizes[i] < mn) mn = t.sizes[i];
+        }
+        // Only an INTERIOR peak (not the first or last reading): a peak still at the
+        // END is a monotonic trend the ratio/net-delta already own — firing here would
+        // just pre-empt them (and their slow-vehicle certainty). An interior peak means
+        // the plate grew to its closest then the tail-off dropped, washing out the
+        // first-vs-last averages — exactly the fast-pass case this rescues.
+        const bool interior = maxIdx > 0 && maxIdx + 1 < t.sizes.size();
+        if (interior && mn > 0 && mx / mn >= cfg_.peakMinSpread) {
+            const double rel = (double)maxIdx / (double)(t.sizes.size() - 1);  // 0..1
+            if      (rel >= 0.5 + cfg_.peakBias) dir = Approaching;
+            else if (rel <= 0.5 - cfg_.peakBias) dir = Receding;
+        }
+    }
+
     if (dir != Unknown && cfg_.requireYAgree) {
         const double dy = avgLast(t.ys) - avgFirst(t.ys);   // low camera: approaching drifts DOWN (+y)
         if (dir == Approaching && dy <  cfg_.minYShiftPx) dir = Unknown;

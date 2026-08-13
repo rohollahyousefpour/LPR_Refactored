@@ -48,6 +48,15 @@ public:
         // noisy pass keeps examining more images until several in a row agree.
         // confirmSightings is a hard cap so a persistently unstable pass still ends.
         int    confirmAgreeing   = 3;
+        // Peak-position fallback (fast/road passes): when the first-vs-last trend is
+        // inconclusive, decide from WHERE the LARGEST (closest) plate falls in the
+        // pass — a plate still growing peaks LATE (approaching), one already shrinking
+        // peaks EARLY (receding). Guarded so it never fires on a flat/noisy pass:
+        //   * the max/min size ratio must reach peakMinSpread (real size variation), and
+        //   * the peak must sit clearly off-centre (|position-0.5| >= peakBias), so a
+        //     symmetric approach-then-leave (peak in the middle) stays Unknown.
+        double peakMinSpread     = 1.08;
+        double peakBias          = 0.15;
     };
 
     DirectionEstimator() = default;

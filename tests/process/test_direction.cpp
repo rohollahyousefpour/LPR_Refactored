@@ -227,5 +227,41 @@ int main() {
         LPR_CHECK(d.update("g:CADR", 60, 100, 29000) == DirectionEstimator::Unknown);   // 20s gap -> new pass
     }
 
+    // Peak-position fallback: with the first-vs-last ratio and the net-delta backstop
+    // BOTH disabled, direction must still be decided from WHERE the largest (closest)
+    // plate falls in the pass. A late peak -> approaching; an early peak -> receding.
+    {
+        DirectionEstimator::Config pc = cfg;
+        pc.minGrowthRatio = 1000.0;     // ratio path can never trigger
+        pc.trendMinSightings = 100000;  // net-delta path can never trigger
+        pc.minSightings = 2;
+        pc.confirmAgreeing = 1;         // commit as soon as the peak decides
+        pc.peakMinSpread = 1.08; pc.peakBias = 0.15;
+
+        // INTERIOR peak in the LATER part (grew to closest, then the reading tailed
+        // off) -> approaching -> ENTER. Only fires once a smaller reading FOLLOWS the
+        // peak (so the peak is interior); an end peak is left to the ratio path.
+        DirectionEstimator da(pc);
+        LPR_CHECK(da.update("g:PKA", 10, 100, 1000) == DirectionEstimator::Unknown);
+        LPR_CHECK(da.update("g:PKA", 12, 100, 1100) == DirectionEstimator::Unknown);
+        LPR_CHECK(da.update("g:PKA", 14, 100, 1200) == DirectionEstimator::Unknown);
+        LPR_CHECK(da.update("g:PKA", 20, 100, 1300) == DirectionEstimator::Unknown);      // peak, still at END
+        LPR_CHECK(da.update("g:PKA", 15, 100, 1400) == DirectionEstimator::Approaching);  // peak now INTERIOR, late
+
+        // INTERIOR peak in the EARLIER part (was biggest early, then shrank) -> receding.
+        DirectionEstimator dr(pc);
+        LPR_CHECK(dr.update("g:PKR", 12, 100, 1000) == DirectionEstimator::Unknown);
+        LPR_CHECK(dr.update("g:PKR", 20, 100, 1100) == DirectionEstimator::Unknown);      // peak at END still
+        LPR_CHECK(dr.update("g:PKR", 14, 100, 1200) == DirectionEstimator::Unknown);      // peak interior, centre
+        LPR_CHECK(dr.update("g:PKR", 12, 100, 1300) == DirectionEstimator::Receding);     // peak interior, early
+
+        // Monotonic growth (peak always at the END) -> peak fallback must NOT pre-empt;
+        // with the ratio/net-delta disabled here it simply stays Unknown.
+        DirectionEstimator df(pc);
+        df.update("g:PKF", 30, 100, 1000);
+        df.update("g:PKF", 31, 100, 1100);
+        LPR_CHECK(df.update("g:PKF", 40, 100, 1200) == DirectionEstimator::Unknown);
+    }
+
     return LPR_TEST_RESULT();
 }
