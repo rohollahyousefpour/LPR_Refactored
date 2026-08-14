@@ -69,6 +69,13 @@ public:
     // Forward a runtime command to the live source (thread-safe).
     void handleCommand(const std::string& key, const std::string& value);
 
+    // Ask the live source to re-read its settings and apply any hardware changes
+    // (Basler: targeted reconnect). Thread-safe; no-op if the source isn't up yet.
+    void reapplySourceSettings() {
+        std::lock_guard<std::mutex> lk(sourceMtx_);
+        if (source_) source_->reapplySettings();
+    }
+
     // Read the exposure (us) + gain a sub-camera (by serial) actually holds now.
     bool readExposureGain(const std::string& serial, double& exposureUs, double& gain);
 

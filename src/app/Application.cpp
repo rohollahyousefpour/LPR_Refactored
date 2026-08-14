@@ -467,19 +467,22 @@ DirectionEstimator::Config Application::readDirectionConfig() {
     return d;
 }
 
-// Apply the plate + direction TUNING to the running pipeline without a rebuild, so a
-// settings save takes effect immediately (structural settings still need a restart).
+// Apply the plate + direction + camera TUNING to the running pipeline without a rebuild, so a
+// settings save takes effect immediately. Hardware camera settings (exposure/GigE/AOI/trigger)
+// apply via a targeted per-camera reconnect; only models, camera address/link-type and queue
+// geometry still need a full restart.
 void Application::reapplyLiveSettings() {
     if (processor_) processor_->setConfig(readPlateConfig());
     if (worker_)    worker_->setDirectionConfig(readDirectionConfig());
-    if (cameras_)   cameras_->reapplyCameraSettings();   // motion-gate tuning per camera
+    if (cameras_)   cameras_->reapplyCameraSettings();   // motion-gate tuning + hardware reconnect (exposure/GigE/AOI/trigger)
     auto& sm = SettingsManager::instance();
     LOGI() << "Application: settings applied LIVE — plate(minVotes=" << sm.getLpr<int>("min_votes").value_or(1)
            << " sim=" << sm.getLpr<float>("plate_similarity").value_or(0.9f)
            << " maxDiffs=" << sm.getLpr<int>("plate_max_char_diffs").value_or(2)
            << ") direction(minSightings=" << sm.getLpr<int>("direction_min_sightings").value_or(3)
            << " growth=" << sm.getLpr<float>("direction_min_growth").value_or(1.15f)
-           << ") + camera motion-gate. Structural (models, camera address/exposure/GigE/AOI/trigger, queue) still need a restart.";
+           << ") + camera motion-gate + hardware exposure/GigE/AOI/trigger (reconnect where changed)."
+           << " Only models, camera address/link-type and queue geometry still need a restart.";
 }
 
 void Application::bootstrapFromJson(const json& settingsBody) {

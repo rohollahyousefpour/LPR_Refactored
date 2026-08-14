@@ -40,10 +40,11 @@ public:
     void stop();
     std::size_t cameraCount() const { return workers_.size(); }
 
-    // Re-read each camera's motion-gate settings and push them to the running worker,
-    // so a camera settings save takes effect immediately (no reconnect). Structural
-    // camera settings (address, link type, Basler exposure/GigE/AOI/trigger) are not
-    // touched here — those apply to the device at connect and need a reconnect.
+    // Re-read each camera's settings and push them to the running worker so a camera
+    // settings save takes effect immediately. Motion-gate thresholds update in place (no
+    // reconnect); Basler hardware settings (exposure/GigE/AOI/trigger) apply via a targeted
+    // per-camera reconnect inside the source. Only camera address/link-type still need a full
+    // restart (they select which device/source is built).
     void reapplyCameraSettings();
 
     // Route a manual command (NATS) to the camera whose gate == cameraId.

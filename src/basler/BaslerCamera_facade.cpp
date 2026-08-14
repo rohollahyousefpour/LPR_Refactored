@@ -5,6 +5,11 @@
 
 #include <pylon/PylonIncludes.h>
 
+#include <climits>
+#include <mutex>
+#include <sstream>
+#include <vector>
+
 // ---------------------------------------------------------------------------
 // LegacySendSink: adapts the new IFrameSink to the old virtual_cap_url output.
 //
@@ -47,39 +52,10 @@ BaslerCamera::BaslerCamera(int x, int y, int w, int h, std::string gate)
     // Settings reads can throw (missing config / bad type). Fall back to the
     // member defaults rather than failing construction.
     try {
-        SettingsManager& s = SettingsManager::instance();
-        cameraId_     = std::atoi(gate_.c_str());
-        maxExposure_  = s.getCameraSettingByIdAndKey<int>(cameraId_, "maxExposure").value_or(15000);
-        maxGain_      = s.getCameraSettingByIdAndKey<int>(cameraId_, "maxGain").value_or(25);
-        minGain_      = s.getCameraSettingByIdAndKey<int>(cameraId_, "minGain").value_or(5);
-        triggerOn_    = s.getCameraSettingByIdAndKey<int>(cameraId_, "trigger_mode").value_or(0);
-        autoExposure_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "continuous_exposure").value_or(1) != 0;
-        rgbPfs_       = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "CamconfigFile").value_or("");
-        // Mono/IR plate camera feature file. Settings-driven and OPTIONAL: default empty
-        // means "no pfs" (configure() skips the load, exactly like the RGB path). This
-        // avoids aborting the mono master on a missing file, which would otherwise take
-        // down its whole stereo pair.
-        monoPfs_      = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "MonoCamconfigFile").value_or("");
-        // Auto-exposure target brightness (0..255) for the single/RGB camera. LOWER it for
-        // retroreflective plates that wash out: a high target meters the (darker) whole scene
-        // and over-exposes the bright plate. ~40-70 exposes for the plate, letting the
-        // background go dark (fine for OCR). Default preserves prior behaviour (100).
-        rgbTarget_    = (double)s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_target").value_or((int)rgbTarget_);
-        // Continuous brightness-loop tuning (host mode). Defaults preserve prior behaviour.
-        expPercentile_ = (double)s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_percentile").value_or((int)expPercentile_);
-        expDeadband_   = (double)s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_deadband").value_or((int)expDeadband_);
-        expDamping_    = (double)s.getCameraSettingByIdAndKey<float>(cameraId_, "exposure_damping").value_or((float)expDamping_);
-        expStepRatio_  = (double)s.getCameraSettingByIdAndKey<float>(cameraId_, "exposure_step_ratio").value_or((float)expStepRatio_);
-        expEma_        = (double)s.getCameraSettingByIdAndKey<float>(cameraId_, "exposure_ema").value_or((float)expEma_);
-        expIntervalMs_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_interval_ms").value_or(expIntervalMs_);
-        expHighlight_  = s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_highlight_priority").value_or(expHighlight_ ? 1 : 0) != 0;
-        // Mono/IR plate camera: short FIXED exposure (ambient rejection) + low gain; the strobed
-        // IR lights the retroreflective plate. Optional settings override the research defaults.
-        monoExposureUs_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "mono_exposure_us").value_or(monoExposureUs_);
-        monoGain_       = s.getCameraSettingByIdAndKey<int>(cameraId_, "mono_gain").value_or(int(monoGain_));
-        // Controller mode: "pylon" (default) = on-sensor continuous auto + free-run (no triggers);
-        // "host" = host strategies (fixed mono + IR strobe sync + host auto RGB).
-        controlMode_  = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "camera_control").value_or("pylon");
+        readSettings();
+        // Baseline snapshot: a later settings save only reconnects a camera if a
+        // hardware-relevant value has actually changed since this point.
+        lastHwSnapshot_ = hwSnapshot();
     }
     catch (const std::exception& e) { AppLogger::LogException(e, "BaslerCamera ctor settings"); }
     catch (...) { AppLogger::LogUnknownException("BaslerCamera ctor settings"); }
@@ -111,6 +87,99 @@ BaslerCamera::~BaslerCamera() {
     try {
         Pylon::PylonTerminate();
     } catch (...) {}
+}
+
+// Read the per-camera hardware settings into the members. Extracted from the ctor so
+// reapplySettings() can refresh them before rebuilding a profile. May throw (callers guard).
+void BaslerCamera::readSettings() {
+    SettingsManager& s = SettingsManager::instance();
+    cameraId_     = std::atoi(gate_.c_str());
+    maxExposure_  = s.getCameraSettingByIdAndKey<int>(cameraId_, "maxExposure").value_or(15000);
+    maxGain_      = s.getCameraSettingByIdAndKey<int>(cameraId_, "maxGain").value_or(25);
+    minGain_      = s.getCameraSettingByIdAndKey<int>(cameraId_, "minGain").value_or(5);
+    triggerOn_    = s.getCameraSettingByIdAndKey<int>(cameraId_, "trigger_mode").value_or(0);
+    autoExposure_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "continuous_exposure").value_or(1) != 0;
+    rgbPfs_       = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "CamconfigFile").value_or("");
+    // Mono/IR plate camera feature file. Settings-driven and OPTIONAL: default empty
+    // means "no pfs" (configure() skips the load, exactly like the RGB path). This
+    // avoids aborting the mono master on a missing file, which would otherwise take
+    // down its whole stereo pair.
+    monoPfs_      = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "MonoCamconfigFile").value_or("");
+    // Auto-exposure target brightness (0..255) for the single/RGB camera. LOWER it for
+    // retroreflective plates that wash out: a high target meters the (darker) whole scene
+    // and over-exposes the bright plate. ~40-70 exposes for the plate, letting the
+    // background go dark (fine for OCR). Default preserves prior behaviour (100).
+    rgbTarget_    = (double)s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_target").value_or((int)rgbTarget_);
+    // Continuous brightness-loop tuning (host mode). Defaults preserve prior behaviour.
+    expPercentile_ = (double)s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_percentile").value_or((int)expPercentile_);
+    expDeadband_   = (double)s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_deadband").value_or((int)expDeadband_);
+    expDamping_    = (double)s.getCameraSettingByIdAndKey<float>(cameraId_, "exposure_damping").value_or((float)expDamping_);
+    expStepRatio_  = (double)s.getCameraSettingByIdAndKey<float>(cameraId_, "exposure_step_ratio").value_or((float)expStepRatio_);
+    expEma_        = (double)s.getCameraSettingByIdAndKey<float>(cameraId_, "exposure_ema").value_or((float)expEma_);
+    expIntervalMs_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_interval_ms").value_or(expIntervalMs_);
+    expHighlight_  = s.getCameraSettingByIdAndKey<int>(cameraId_, "exposure_highlight_priority").value_or(expHighlight_ ? 1 : 0) != 0;
+    // Mono/IR plate camera: short FIXED exposure (ambient rejection) + low gain; the strobed
+    // IR lights the retroreflective plate. Optional settings override the research defaults.
+    monoExposureUs_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "mono_exposure_us").value_or(monoExposureUs_);
+    monoGain_       = s.getCameraSettingByIdAndKey<int>(cameraId_, "mono_gain").value_or(int(monoGain_));
+    // Controller mode: "pylon" (default) = on-sensor continuous auto + free-run (no triggers);
+    // "host" = host strategies (fixed mono + IR strobe sync + host auto RGB).
+    controlMode_  = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "camera_control").value_or("pylon");
+}
+
+// Fingerprint of every setting that only takes effect at connect: the per-camera exposure/
+// trigger/control block PLUS the LPR-level GigE budget + hardware-AOI keys that applyBandwidth()
+// re-reads on connect. reapplySettings() reconnects only when this string changes, so tuning that
+// applies live (motion gate, gige_adapt_*) never triggers a needless reconnect.
+std::string BaslerCamera::hwSnapshot() const {
+    SettingsManager& s = SettingsManager::instance();
+    std::ostringstream o;
+    const int id = cameraId_;
+    auto ci = [&](const char* k){ o << k << '=' << s.getCameraSettingByIdAndKey<int>(id, k).value_or(INT_MIN) << ';'; };
+    auto cf = [&](const char* k){ o << k << '=' << s.getCameraSettingByIdAndKey<float>(id, k).value_or(-1e30f) << ';'; };
+    auto cs = [&](const char* k){ o << k << '=' << s.getCameraSettingByIdAndKey<std::string>(id, k).value_or("") << ';'; };
+    auto li = [&](const char* k){ o << k << '=' << s.getLpr<int>(k).value_or(INT_MIN) << ';'; };
+    ci("maxExposure"); ci("maxGain"); ci("minGain"); ci("trigger_mode"); ci("continuous_exposure");
+    cs("CamconfigFile"); cs("MonoCamconfigFile");
+    ci("exposure_target"); ci("exposure_percentile"); ci("exposure_deadband");
+    cf("exposure_damping"); cf("exposure_step_ratio"); cf("exposure_ema");
+    ci("exposure_interval_ms"); ci("exposure_highlight_priority");
+    ci("mono_exposure_us"); ci("mono_gain"); cs("camera_control");
+    // LPR-level, re-read by ConnectionSupervisor::applyBandwidth() / the AOI gate at connect.
+    li("basler_sensor_aoi"); li("gige_packet_size"); li("gige_link_mbytes_per_sec");
+    li("gige_scpd_floor"); li("gige_fps_safety_pct"); li("gige_frame_rate_cap"); li("gige_bw_reserve_pct");
+    return o.str();
+}
+
+// Live re-apply of hardware settings via TARGETED RECONNECT. On a settings save the
+// CameraWorker calls this; if any connect-time setting changed we refresh the members,
+// rebuild each connected camera's profile from the new values, and fault it so the
+// supervisor reconnects it through the same tested path used at startup -- which re-applies
+// exposure (new profile), GigE budget + AOI (applyBandwidth re-reads), and trigger/control.
+// One camera blips (~1-2s) at a time; the pipeline and the other cameras keep running.
+void BaslerCamera::reapplySettings() {
+    try {
+        const std::string snap = hwSnapshot();
+        if (snap == lastHwSnapshot_) return;   // nothing that needs a reconnect changed
+        lastHwSnapshot_ = snap;
+        readSettings();                         // refresh members so buildProfile() uses new values
+
+        std::vector<std::string> serials;
+        {
+            std::lock_guard<std::mutex> lk(ctx_.devMutex);
+            serials.reserve(ctx_.devices.size());
+            for (auto& [s, dev] : ctx_.devices) if (dev) serials.push_back(s);
+        }
+        for (const auto& serial : serials) {
+            const bool mono = (!monoSerial_.empty() && serial == monoSerial_);
+            supervisor_->addProfile(buildProfile(serial, mono, /*master*/mono));   // overwrite stored profile
+            supervisor_->handleFault(serial);                                       // drop + async reconnect
+        }
+        LOGI() << "[BaslerCamera] hardware settings changed -> reconnecting "
+               << serials.size() << " camera(s) to apply exposure/GigE/AOI/trigger LIVE";
+    }
+    catch (const std::exception& e) { AppLogger::LogException(e, "BaslerCamera::reapplySettings"); }
+    catch (...) { AppLogger::LogUnknownException("BaslerCamera::reapplySettings"); }
 }
 
 ConnectionSupervisor::Profile
@@ -216,6 +285,7 @@ void BaslerCamera::set_mono_adress(std::string serial, int delay) {
         ctx_.delay = delay;
         ctx_.expectedCount = 2;   // mono present => this instance is a pair
         hasMono_ = true;          // any RGB in this instance is now a slave
+        monoSerial_ = serial;     // remember the master's role for a role-preserving reconnect
 
         // Mono is the master: trigger off, config-2 (Exposure Active out on Line2).
         supervisor_->addProfile(buildProfile(serial, /*mono*/true, /*master*/true));

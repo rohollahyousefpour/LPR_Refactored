@@ -109,8 +109,13 @@ void CameraManager::reapplyCameraSettings() {
         const int    objSz  = s.getCameraSettingByIdAndKey<int>(id, "ObjectSize").value_or(def.minChangedPixels);
         const int    delay  = s.getCameraSettingByIdAndKey<int>(id, "CameraDelayTime").value_or(def.delayMs);
         w->setMotionTuning(minDev, maxDev, objSz, delay);
+        // Structural/hardware camera settings (Basler exposure/GigE/AOI/trigger): the source
+        // reconnects only the cameras whose connect-time settings actually changed. No-op for
+        // video/rtsp sources and when nothing hardware-relevant changed.
+        w->reapplySourceSettings();
         ++n;
     }
-    LOGI() << "CameraManager: re-applied motion-gate settings to " << n << " camera(s) live";
+    LOGI() << "CameraManager: re-applied motion-gate settings to " << n << " camera(s) live"
+           << " (+ hardware reconnect where changed)";
 }
 } // namespace lpr

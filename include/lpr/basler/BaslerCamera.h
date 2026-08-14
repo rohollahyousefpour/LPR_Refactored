@@ -40,7 +40,19 @@ public:
     // Report the true applied exposure/gain for a sub-camera (mono or RGB) by serial.
     bool readAppliedExposureGain(const std::string& serial, double& exposureUs, double& gain) override;
 
+    // Re-read the camera's hardware settings and, if any changed since the last apply,
+    // reconnect ONLY the affected cameras so exposure/GigE/AOI/trigger apply cleanly through
+    // the tested connect path (a ~1-2s per-camera blip; the rest of the pipeline keeps running).
+    void reapplySettings() override;
+
 private:
+    // Read the per-camera settings (exposure/trigger/control/config-files) into the members.
+    // Shared by the constructor and reapplySettings(); may throw (callers guard).
+    void readSettings();
+    // A stable string of every hardware-relevant setting (per-camera exposure/trigger/control +
+    // LPR-level GigE/AOI), read fresh. reapplySettings() reconnects only when this changes.
+    std::string hwSnapshot() const;
+
     // Build a ConnectionSupervisor::Profile for a serial from settings.
     ConnectionSupervisor::Profile buildProfile(const std::string& serial,
                                                bool mono, bool master);
@@ -85,6 +97,8 @@ private:
     std::string controlMode_ = "pylon";
 
     bool   hasMono_ = false;   // true once a mono master is registered (=> pair)
+    std::string monoSerial_;   // serial of the mono master (set via set_mono_adress), for role-preserving reconnect
+    std::string lastHwSnapshot_;   // hwSnapshot() at last apply; reapplySettings() no-ops when unchanged
 
     // Stereo rectification (carried over from the old BaslerCamera).
     bool enableStereo_ = false;

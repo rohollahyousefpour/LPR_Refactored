@@ -29,6 +29,14 @@ public:
 
     virtual void handleCommand(const std::string& /*key*/, const std::string& /*value*/) {}
 
+    // Re-read this source's settings and apply any that changed, WITHOUT tearing the
+    // whole pipeline down. Default: no-op (video/rtsp sources have nothing hardware-bound
+    // to re-apply). The Basler facade overrides it to reconnect only the cameras whose
+    // hardware settings (exposure / GigE / AOI / trigger) actually changed, so those apply
+    // cleanly through the tested connect path. Called on a settings save, off the capture
+    // thread; implementations must be thread-safe w.r.t. their own capture loop.
+    virtual void reapplySettings() {}
+
     // Read the exposure (microseconds) + gain a sub-camera actually holds right now, by serial.
     // Default: unsupported (returns false). Basler overrides it so the manual-control live view can
     // report the true applied values instead of the requested ones.
