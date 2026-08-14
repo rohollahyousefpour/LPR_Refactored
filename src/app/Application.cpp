@@ -473,6 +473,7 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         ppcfg.similarityThreshold = static_cast<double>(sm.getLpr<float>("plate_similarity").value_or(static_cast<float>(ppcfg.similarityThreshold)));
         ppcfg.minConfidence       = sm.getLpr<float>("ocr_prob").value_or(ppcfg.minConfidence);
         ppcfg.passGapMs           = sm.getLpr<int>("plate_pass_gap_ms").value_or(static_cast<int>(ppcfg.passGapMs));
+        ppcfg.maxPlateCharDiffs   = sm.getLpr<int>("plate_max_char_diffs").value_or(ppcfg.maxPlateCharDiffs);
     }
     // Publish notable OCR-consensus overrides as module-diag events (best-effort).
     ppcfg.diag = [this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); };
@@ -556,6 +557,9 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         // consistent net size change once enough sightings accumulate.
         dwcfg.direction.trendMinSightings = std::max(3, sm.getLpr<int>("direction_trend_min_sightings").value_or(6));
         dwcfg.direction.minTrendDeltaPx   = (double)sm.getLpr<float>("direction_trend_delta_px").value_or(5.0f);
+        // Peak-position fallback tuning (largest-plate position decides direction).
+        dwcfg.direction.peakMinSpread     = std::max(1.0, (double)sm.getLpr<float>("direction_peak_min_spread").value_or(1.08f));
+        dwcfg.direction.peakBias          = std::clamp((double)sm.getLpr<float>("direction_peak_bias").value_or(0.15f), 0.0, 0.49);
         // Use MORE movement before finalizing: the early guess is announced at
         // minSightings and refined/corrected until this many sightings confirm it.
         dwcfg.direction.confirmSightings  = std::max(sm.getLpr<int>("direction_min_sightings").value_or(3),
