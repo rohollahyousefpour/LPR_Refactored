@@ -472,13 +472,14 @@ DirectionEstimator::Config Application::readDirectionConfig() {
 void Application::reapplyLiveSettings() {
     if (processor_) processor_->setConfig(readPlateConfig());
     if (worker_)    worker_->setDirectionConfig(readDirectionConfig());
+    if (cameras_)   cameras_->reapplyCameraSettings();   // motion-gate tuning per camera
     auto& sm = SettingsManager::instance();
     LOGI() << "Application: settings applied LIVE — plate(minVotes=" << sm.getLpr<int>("min_votes").value_or(1)
            << " sim=" << sm.getLpr<float>("plate_similarity").value_or(0.9f)
            << " maxDiffs=" << sm.getLpr<int>("plate_max_char_diffs").value_or(2)
            << ") direction(minSightings=" << sm.getLpr<int>("direction_min_sightings").value_or(3)
            << " growth=" << sm.getLpr<float>("direction_min_growth").value_or(1.15f)
-           << "). Structural changes (models/cameras/queue) still need a restart.";
+           << ") + camera motion-gate. Structural (models, camera address/exposure/GigE/AOI/trigger, queue) still need a restart.";
 }
 
 void Application::bootstrapFromJson(const json& settingsBody) {

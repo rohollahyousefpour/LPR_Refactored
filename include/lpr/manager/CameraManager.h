@@ -40,6 +40,12 @@ public:
     void stop();
     std::size_t cameraCount() const { return workers_.size(); }
 
+    // Re-read each camera's motion-gate settings and push them to the running worker,
+    // so a camera settings save takes effect immediately (no reconnect). Structural
+    // camera settings (address, link type, Basler exposure/GigE/AOI/trigger) are not
+    // touched here — those apply to the device at connect and need a reconnect.
+    void reapplyCameraSettings();
+
     // Route a manual command (NATS) to the camera whose gate == cameraId.
     // value is an opaque JSON-object string forwarded to the source. No-op (warns)
     // if no camera matches.

@@ -55,6 +55,17 @@ public:
     // Runtime ROI update (e.g. computed from settings on the first frame).
     void setRoi(const cv::Rect& roi);
 
+    // Live-update the motion-gate tuning (from a settings save) without a reconnect —
+    // only the per-frame gate thresholds change; the ROI, source, and mono/RGB pairing
+    // are left as-is. Fields are POD and read on the capture thread, so a concurrent
+    // read only ever sees a benign field-mix.
+    void setMotionTuning(double minDev, double maxDev, int minChangedPixels, int delayMs) {
+        cfg_.minDeviation     = minDev;
+        cfg_.maxDeviation     = maxDev;
+        cfg_.minChangedPixels = minChangedPixels;
+        cfg_.delayMs          = delayMs;
+    }
+
     // Forward a runtime command to the live source (thread-safe).
     void handleCommand(const std::string& key, const std::string& value);
 

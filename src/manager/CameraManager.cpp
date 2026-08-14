@@ -95,4 +95,22 @@ void CameraManager::buildFromSettings(MotionConfig defaults) {
     }
     LOGI() << "CameraManager: built " << workers_.size() << " camera(s) from settings";
 }
+
+void CameraManager::reapplyCameraSettings() {
+    auto& s = SettingsManager::instance();
+    const MotionConfig def{};   // fallbacks match buildFromSettings' defaults
+    int n = 0;
+    for (auto& w : workers_) {
+        if (!w) continue;
+        int id = 0;
+        try { id = std::stoi(w->gate()); } catch (...) { continue; }
+        const double minDev = s.getCameraSettingByIdAndKey<float>(id, "MinDeviation").value_or((float)def.minDeviation);
+        const double maxDev = s.getCameraSettingByIdAndKey<float>(id, "MaxDeviation").value_or((float)def.maxDeviation);
+        const int    objSz  = s.getCameraSettingByIdAndKey<int>(id, "ObjectSize").value_or(def.minChangedPixels);
+        const int    delay  = s.getCameraSettingByIdAndKey<int>(id, "CameraDelayTime").value_or(def.delayMs);
+        w->setMotionTuning(minDev, maxDev, objSz, delay);
+        ++n;
+    }
+    LOGI() << "CameraManager: re-applied motion-gate settings to " << n << " camera(s) live";
+}
 } // namespace lpr
