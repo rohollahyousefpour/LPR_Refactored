@@ -88,6 +88,10 @@ public:
     void setPlateProcessor(PlateProcessor proc) { processor_ = std::move(proc); }
     void setRoiPolygonProvider(RoiPolygonProvider p) { roiPolygon_ = std::move(p); }
     void setDiagSink(DiagSink d) { diag_ = std::move(d); }
+    // Live-update the direction tuning (from a settings save). DirectionEstimator's
+    // config is all POD, so a concurrent update() on the worker thread only ever sees a
+    // benign field-mix, never a torn pointer.
+    void setDirectionConfig(const DirectionEstimator::Config& c) { dir_.setConfig(c); cfg_.direction = c; }
     // Publish detection annotations here so the (continuously-fed) live stream can draw them.
     void setLiveOverlay(LiveOverlay* o) { overlay_ = o; }
     void setPlateFilter(PlateFilter f);                    // bool predicate -> processor

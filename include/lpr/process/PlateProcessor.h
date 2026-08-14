@@ -68,6 +68,20 @@ public:
     std::size_t trackedCount() const { return tracks_.size(); }
     void clear() { tracks_.clear(); untrackedCounter_ = 0; }
 
+    // Live-update the tuning knobs (from a settings save) without a rebuild. Copies
+    // only the POD fields — validator and diag (std::function) are left as constructed
+    // so a concurrent process() on the worker thread can't read a half-assigned
+    // function pointer; the scalar fields tear-read atomically, so a momentary mix is
+    // harmless (self-corrects on the next read).
+    void setConfig(const PlateProcessorConfig& c) {
+        cfg_.similarityThreshold = c.similarityThreshold;
+        cfg_.minVotes            = c.minVotes;
+        cfg_.minConfidence       = c.minConfidence;
+        cfg_.trackTtlMs          = c.trackTtlMs;
+        cfg_.passGapMs           = c.passGapMs;
+        cfg_.maxPlateCharDiffs   = c.maxPlateCharDiffs;
+    }
+
 private:
     struct Track {
         // (text, weight) where weight = confidence × plate-size — larger/closer plates

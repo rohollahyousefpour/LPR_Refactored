@@ -104,6 +104,14 @@ private:
     void  requestSettings();                         // alpr.settings.request -> response.<clientId>
     void  publishManualLive(const FrameItem& f);     // one "live_manual_control" msg (both sensors)
     std::unique_ptr<IPlateRecognizer> buildRecognizerChain();   // the four variants + ROI wrap
+    // Build the plate/direction tuning configs from the current settings — shared by
+    // the initial bootstrap and the LIVE re-apply so both stay in sync.
+    PlateProcessorConfig        readPlateConfig();
+    DirectionEstimator::Config  readDirectionConfig();
+    // Apply the tuning settings to the RUNNING pipeline (plate + direction) without a
+    // full rebuild, so a settings save takes effect immediately. Structural settings
+    // (models, camera addresses, queue size) still require a restart.
+    void  reapplyLiveSettings();
 
     Options opts_;
     std::unique_ptr<AppConfig> config_;              // local config file (model paths), if provided

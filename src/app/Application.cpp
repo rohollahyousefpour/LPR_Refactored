@@ -437,12 +437,61 @@ std::unique_ptr<IPlateRecognizer> Application::buildRecognizerChain() {
     return nullptr;   // chain owned by members; topRecognizer_ points at the head of it
 }
 
+PlateProcessorConfig Application::readPlateConfig() {
+    auto& sm = SettingsManager::instance();
+    PlateProcessorConfig pp;   // capture-all defaults
+    pp.minVotes            = sm.getLpr<int>("min_votes").value_or(pp.minVotes);
+    pp.similarityThreshold = static_cast<double>(sm.getLpr<float>("plate_similarity").value_or(static_cast<float>(pp.similarityThreshold)));
+    pp.minConfidence       = sm.getLpr<float>("ocr_prob").value_or(pp.minConfidence);
+    pp.passGapMs           = sm.getLpr<int>("plate_pass_gap_ms").value_or(static_cast<int>(pp.passGapMs));
+    pp.maxPlateCharDiffs   = sm.getLpr<int>("plate_max_char_diffs").value_or(pp.maxPlateCharDiffs);
+    pp.diag = [this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); };
+    return pp;
+}
+
+DirectionEstimator::Config Application::readDirectionConfig() {
+    auto& sm = SettingsManager::instance();
+    DirectionEstimator::Config d;
+    d.minSightings      = std::max(2, sm.getLpr<int>("direction_min_sightings").value_or(3));
+    d.minGrowthRatio    = std::max(1.01, (double)sm.getLpr<float>("direction_min_growth").value_or(1.15f));
+    d.cooldownMs        = (long)sm.getLpr<int>("direction_cooldown_sec").value_or(8) * 1000;
+    d.trackGapMs        = (long)sm.getLpr<int>("direction_gap_sec").value_or(3) * 1000;
+    d.requireYAgree     = (sm.getLpr<int>("direction_require_y").value_or(0) == 1);
+    d.trendMinSightings = std::max(3, sm.getLpr<int>("direction_trend_min_sightings").value_or(6));
+    d.minTrendDeltaPx   = (double)sm.getLpr<float>("direction_trend_delta_px").value_or(5.0f);
+    d.peakMinSpread     = std::max(1.0, (double)sm.getLpr<float>("direction_peak_min_spread").value_or(1.08f));
+    d.peakBias          = std::clamp((double)sm.getLpr<float>("direction_peak_bias").value_or(0.15f), 0.0, 0.49);
+    d.confirmSightings  = std::max(sm.getLpr<int>("direction_min_sightings").value_or(3),
+                                   sm.getLpr<int>("direction_confirm_sightings").value_or(8));
+    d.confirmAgreeing   = std::max(2, sm.getLpr<int>("direction_confirm_agreeing").value_or(3));
+    return d;
+}
+
+// Apply the plate + direction TUNING to the running pipeline without a rebuild, so a
+// settings save takes effect immediately (structural settings still need a restart).
+void Application::reapplyLiveSettings() {
+    if (processor_) processor_->setConfig(readPlateConfig());
+    if (worker_)    worker_->setDirectionConfig(readDirectionConfig());
+    auto& sm = SettingsManager::instance();
+    LOGI() << "Application: settings applied LIVE — plate(minVotes=" << sm.getLpr<int>("min_votes").value_or(1)
+           << " sim=" << sm.getLpr<float>("plate_similarity").value_or(0.9f)
+           << " maxDiffs=" << sm.getLpr<int>("plate_max_char_diffs").value_or(2)
+           << ") direction(minSightings=" << sm.getLpr<int>("direction_min_sightings").value_or(3)
+           << " growth=" << sm.getLpr<float>("direction_min_growth").value_or(1.15f)
+           << "). Structural changes (models/cameras/queue) still need a restart.";
+}
+
 void Application::bootstrapFromJson(const json& settingsBody) {
     std::lock_guard<std::mutex> lk(bootMtx_);
-    if (booted_.exchange(true)) {
-        LOGI() << "Application: settings update received (already bootstrapped; rebuild not implemented)";
+    if (booted_.load()) {
+        // Already running: don't rebuild the whole pipeline — apply the tuning LIVE so
+        // an LPR/camera settings save takes effect immediately on plate-reading + direction.
+        LOGI() << "Application: settings update received -> applying live (no rebuild)";
+        SettingsManager::instance().loadAll(settingsBody);
+        reapplyLiveSettings();
         return;
     }
+    booted_.store(true);
     LOGI() << "Application: bootstrapping from settings";
     if (!transport_) transport_ = std::make_unique<InMemoryTransport>();   // offline: no start()
     SettingsManager::instance().loadAll(settingsBody);
@@ -466,17 +515,9 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         frames_ = std::make_shared<FrameQueue>(cap);
         LOGI() << "Application: frame queue capacity=" << cap << " (BufferSize=" << maxBuf << " x " << ncam << " cameras)";
     }
-    PlateProcessorConfig ppcfg;   // capture-all defaults: minVotes 1, send-once-per-pass, JW 0.90
-    {
-        auto& sm = SettingsManager::instance();
-        ppcfg.minVotes            = sm.getLpr<int>("min_votes").value_or(ppcfg.minVotes);
-        ppcfg.similarityThreshold = static_cast<double>(sm.getLpr<float>("plate_similarity").value_or(static_cast<float>(ppcfg.similarityThreshold)));
-        ppcfg.minConfidence       = sm.getLpr<float>("ocr_prob").value_or(ppcfg.minConfidence);
-        ppcfg.passGapMs           = sm.getLpr<int>("plate_pass_gap_ms").value_or(static_cast<int>(ppcfg.passGapMs));
-        ppcfg.maxPlateCharDiffs   = sm.getLpr<int>("plate_max_char_diffs").value_or(ppcfg.maxPlateCharDiffs);
-    }
-    // Publish notable OCR-consensus overrides as module-diag events (best-effort).
-    ppcfg.diag = [this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); };
+    // capture-all defaults + live-tunable knobs (min_votes/plate_similarity/…); the
+    // diag hook publishes notable OCR-consensus overrides as module-diag events.
+    PlateProcessorConfig ppcfg = readPlateConfig();
     processor_ = std::make_unique<PlateProcessor>(ppcfg);
     LOGI() << "Application: plate processor minVotes=" << ppcfg.minVotes
            << " similarity=" << ppcfg.similarityThreshold << " minConf=" << ppcfg.minConfidence
@@ -546,27 +587,10 @@ void Application::bootstrapFromJson(const json& settingsBody) {
     dwcfg.annotateEvidence = (SettingsManager::instance().getLpr<int>("evidence_overlay").value_or(1) == 1);
     {
         auto& sm = SettingsManager::instance();
-        dwcfg.directionEnable          = (sm.getLpr<int>("direction_enable").value_or(1) == 1);
-        dwcfg.direction.minSightings   = std::max(2, sm.getLpr<int>("direction_min_sightings").value_or(3));
-        dwcfg.direction.minGrowthRatio = std::max(1.01, (double)sm.getLpr<float>("direction_min_growth").value_or(1.15f));
-        dwcfg.direction.cooldownMs     = (long)sm.getLpr<int>("direction_cooldown_sec").value_or(8) * 1000;
-        dwcfg.direction.trackGapMs     = (long)sm.getLpr<int>("direction_gap_sec").value_or(3) * 1000;
-        dwcfg.direction.requireYAgree  = (sm.getLpr<int>("direction_require_y").value_or(0) == 1);
-        // Slow/stopping-vehicle trend path (handles a low-speed car whose plate size
-        // barely changes so the growth ratio never fires): decide from a small but
-        // consistent net size change once enough sightings accumulate.
-        dwcfg.direction.trendMinSightings = std::max(3, sm.getLpr<int>("direction_trend_min_sightings").value_or(6));
-        dwcfg.direction.minTrendDeltaPx   = (double)sm.getLpr<float>("direction_trend_delta_px").value_or(5.0f);
-        // Peak-position fallback tuning (largest-plate position decides direction).
-        dwcfg.direction.peakMinSpread     = std::max(1.0, (double)sm.getLpr<float>("direction_peak_min_spread").value_or(1.08f));
-        dwcfg.direction.peakBias          = std::clamp((double)sm.getLpr<float>("direction_peak_bias").value_or(0.15f), 0.0, 0.49);
-        // Use MORE movement before finalizing: the early guess is announced at
-        // minSightings and refined/corrected until this many sightings confirm it.
-        dwcfg.direction.confirmSightings  = std::max(sm.getLpr<int>("direction_min_sightings").value_or(3),
-                                                     sm.getLpr<int>("direction_confirm_sightings").value_or(8));
-        // Certainty: finalize only after the direction agrees on this many consecutive
-        // images (a flip keeps it examining more images until several in a row agree).
-        dwcfg.direction.confirmAgreeing   = std::max(2, sm.getLpr<int>("direction_confirm_agreeing").value_or(3));
+        dwcfg.directionEnable = (sm.getLpr<int>("direction_enable").value_or(1) == 1);
+        // All direction-estimator tuning (min sightings/growth, slow-vehicle trend,
+        // peak-position fallback, confirm counts) — shared with the live re-apply path.
+        dwcfg.direction = readDirectionConfig();
         // Same-pass plate similarity: OCR flicker within one pass keeps its passId
         // (so the backend merges early + correction); a clearly different plate starts
         // a new pass. Reuses the OCR consensus threshold, floored a little lower.
