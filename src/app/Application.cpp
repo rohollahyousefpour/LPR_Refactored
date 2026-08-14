@@ -466,8 +466,10 @@ DirectionEstimator::Config Application::readDirectionConfig() {
     d.confirmAgreeing   = std::max(2, sm.getLpr<int>("direction_confirm_agreeing").value_or(3));
     // Exit-strictness + announce-hold (reduce wrong «خروج» and «نامشخص»). Defaults are
     // tuned for a mostly one-directional (approaching) gate; 1.0 / 0 restore legacy symmetry.
-    d.recedingBias         = std::max(1.0, (double)sm.getLpr<float>("direction_receding_bias").value_or(1.3f));
-    d.recedingMinSightings = std::max(0, sm.getLpr<int>("direction_receding_min_sightings").value_or(5));
+    // Default SYMMETRIC (1.0 / 0): safe for a bidirectional gate (parking, two-way) where
+    // real exits are common. A one-directional road raises these (via settings) to ~1.3 / ~5.
+    d.recedingBias         = std::max(1.0, (double)sm.getLpr<float>("direction_receding_bias").value_or(1.0f));
+    d.recedingMinSightings = std::max(0, sm.getLpr<int>("direction_receding_min_sightings").value_or(0));
     d.announceHoldSightings= std::max(0, sm.getLpr<int>("direction_announce_hold").value_or(3));
     return d;
 }
@@ -486,8 +488,8 @@ void Application::reapplyLiveSettings() {
            << " maxDiffs=" << sm.getLpr<int>("plate_max_char_diffs").value_or(2)
            << ") direction(minSightings=" << sm.getLpr<int>("direction_min_sightings").value_or(3)
            << " growth=" << sm.getLpr<float>("direction_min_growth").value_or(1.15f)
-           << " recedingBias=" << sm.getLpr<float>("direction_receding_bias").value_or(1.3f)
-           << " recedingMinSight=" << sm.getLpr<int>("direction_receding_min_sightings").value_or(5)
+           << " recedingBias=" << sm.getLpr<float>("direction_receding_bias").value_or(1.0f)
+           << " recedingMinSight=" << sm.getLpr<int>("direction_receding_min_sightings").value_or(0)
            << " announceHold=" << sm.getLpr<int>("direction_announce_hold").value_or(3)
            << ") + camera motion-gate + hardware exposure/GigE/AOI/trigger (reconnect where changed)."
            << " Only models, camera address/link-type and queue geometry still need a restart.";
