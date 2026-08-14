@@ -23,6 +23,24 @@ bool checkPlate8(const std::string& s) {
 
 PlateProcessor::PlateProcessor(PlateProcessorConfig cfg) : cfg_(std::move(cfg)) {}
 
+// Same plate despite OCR noise: identical length, every DIFFERING position is a
+// digit↔digit substitution (so the LETTER slot must match exactly), and no more
+// than maxDiffs positions differ. Rescues digit misreads like 22b21957 vs
+// 32b31957 that a Jaro threshold splits, while a different letter or a clearly
+// different number (>maxDiffs, or a letter/structure change) is NOT merged.
+static bool plateSimilar(const std::string& a, const std::string& b, int maxDiffs) {
+    if (maxDiffs <= 0 || a.empty() || a.size() != b.size()) return false;
+    int diffs = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i] == b[i]) continue;
+        const bool aDigit = std::isdigit(static_cast<unsigned char>(a[i])) != 0;
+        const bool bDigit = std::isdigit(static_cast<unsigned char>(b[i])) != 0;
+        if (!aDigit || !bDigit) return false;   // a letter/structure mismatch -> different plate
+        if (++diffs > maxDiffs) return false;
+    }
+    return diffs > 0 && diffs <= maxDiffs;
+}
+
 std::string PlateProcessor::weightedConsensus(const std::vector<std::pair<std::string, double>>& reads) {
     // Sum the per-read weight (confidence × plate size) per distinct text; the highest
     // total wins — so an agreeing majority of large/clear reads beats a single misread,
@@ -46,15 +64,19 @@ std::string PlateProcessor::resolveKey(const PlateResult& p, long nowMs) {
     // a fresh pass instead. This both lets a returning plate re-send and stops cross-car bleed.
     const std::string prefix = "g:" + p.gate + "#";
     std::string bestKey;
-    double bestSim = 0.0;
+    double bestSim = -1.0;
     for (const auto& kv : tracks_) {
         if (kv.first.rfind(prefix, 0) != 0) continue;
         if (cfg_.passGapMs > 0 && nowMs > 0 && kv.second.lastUpdateMs > 0 &&
             nowMs - kv.second.lastUpdateMs > cfg_.passGapMs) continue;   // different pass
-        double s = jaroWinklerDistance(p.text, kv.second.consensus);
-        if (s > bestSim) { bestSim = s; bestKey = kv.first; }
+        const double s = jaroWinklerDistance(p.text, kv.second.consensus);
+        // Join a cluster on EITHER the Jaro threshold OR the plate-structure rule
+        // (a couple of digit misreads of the same plate); pick the closest such one.
+        const bool qualifies = s >= cfg_.similarityThreshold ||
+                               plateSimilar(p.text, kv.second.consensus, cfg_.maxPlateCharDiffs);
+        if (qualifies && s > bestSim) { bestSim = s; bestKey = kv.first; }
     }
-    if (bestSim >= cfg_.similarityThreshold && !bestKey.empty()) return bestKey;
+    if (!bestKey.empty()) return bestKey;
     return prefix + std::to_string(untrackedCounter_++);
 }
 
@@ -87,7 +109,8 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     // 34m47577) must still count toward that vehicle. Rejecting them here is what starved the vote
     // and dropped every plate in vehicle mode.
     if (!tracked && !tr.reads.empty() &&
-        jaroWinklerDistance(plate.text, tr.consensus) < cfg_.similarityThreshold)
+        jaroWinklerDistance(plate.text, tr.consensus) < cfg_.similarityThreshold &&
+        !plateSimilar(plate.text, tr.consensus, cfg_.maxPlateCharDiffs))
         return std::nullopt;
 
     // Weight each read by confidence × plate SIZE: the largest (closest) plate has the

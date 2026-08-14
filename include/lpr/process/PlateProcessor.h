@@ -39,6 +39,12 @@ struct PlateProcessorConfig {
     long   passGapMs           = 1500;        // a gap longer than this ends a car's "pass"; a
                                               // later similar read starts a NEW pass (re-sends),
                                               // and a new car can't be absorbed into an old pass
+    // Plate-structure merge: two reads of the SAME length whose (single) LETTER
+    // slot matches and which differ in at most this many DIGIT positions are the
+    // same plate despite OCR noise (e.g. 22b21957 vs 32b31957). Catches digit
+    // misreads a Jaro threshold rejects, WITHOUT merging a different letter or a
+    // clearly different number. 0 disables the rule (Jaro-only clustering).
+    int    maxPlateCharDiffs   = 2;
     // Optional: publish a diagnostic JSON (to messages.module_diag) when the
     // accuracy-weighted consensus OVERRODE the single highest-confidence read —
     // the notable "the vote saved us from a misread" case. Best-effort.

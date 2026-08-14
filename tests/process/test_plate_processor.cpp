@@ -147,6 +147,36 @@ int main() {
         }
     }
 
+    // Plate-structure merge: two OCR variants of ONE plate — same letter slot, ≤2
+    // digit misreads — merge into a single pass even though Jaro splits them, and the
+    // LARGER (closer) plate's text is emitted once (fixes "one plate stored twice").
+    // A number that differs in 3 digits is a DIFFERENT plate and stays separate.
+    {
+        PlateProcessorConfig vc; vc.minVotes = 2; vc.maxPlateCharDiffs = 2;
+        PlateProcessor pv(vc);
+        auto sized = [](const std::string& t, float c, float w, float h, long ms) {
+            PlateResult p; p.text = t; p.confidence = c; p.trackId = -1; p.gate = "gm"; p.timestamp = ms;
+            p.box = cv::RotatedRect(cv::Point2f(0.f, 0.f), cv::Size2f(w, h), 0.f);
+            return p;
+        };
+        // small blurry misread first, then the big clear read: 2 digit diffs, same letter 'b'.
+        LPR_CHECK(!pv.process(sized("32b31957", 0.90f, 39, 18, 1000)).has_value());   // held
+        auto m = pv.process(sized("22b21957", 0.99f, 64, 20, 1100));                  // merges + emits
+        LPR_CHECK(m.has_value());
+        if (m) {
+            std::cout << "merged-plate emit: " << m->text << "\n";
+            LPR_CHECK(m->text == "22b21957");   // ONE plate, the larger/closer text
+        }
+
+        // A 3-digit-different number is a DIFFERENT plate -> NOT merged (separate emit).
+        PlateProcessor pv2(vc);
+        LPR_CHECK(!pv2.process(sized("11a22233", 0.95f, 50, 20, 1000)).has_value());
+        LPR_CHECK(pv2.process(sized("11a22233", 0.95f, 50, 20, 1100)).has_value());   // emits 11a22233
+        LPR_CHECK(!pv2.process(sized("11a22000", 0.95f, 50, 20, 1200)).has_value());  // new cluster, held
+        auto d = pv2.process(sized("11a22000", 0.95f, 50, 20, 1300));
+        LPR_CHECK(d.has_value() && d->text == "11a22000");                            // separate plate
+    }
+
     if (LPR_TEST_RESULT() == 0) std::cout << "plate_processor: OK\n";
     return LPR_TEST_RESULT();
 }
