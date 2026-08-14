@@ -361,10 +361,19 @@ void DetectionWorker::process(FrameItem& item) {
         const int phys = cfg_.directionEnable ? physicalDirection(item.gate, out.plate.text) : 0;
         PassState& st = passes_[item.gate];   // SAME gate-keyed pass state passIdFor maintains
         if (!st.emittedEarly) {
+            // Announce-hold: wait for the direction to SETTLE before the first announce, so
+            // the first stored row already carries entry/exit instead of «unknown». Bounded
+            // by announceHoldSightings kept reads so a genuinely short/undecidable pass is
+            // still announced (as unknown) and never lost. 0 => announce immediately (legacy).
+            const int hold = cfg_.directionEnable ? cfg_.direction.announceHoldSightings : 0;
+            if (hold > 0 && phys == 0 && st.heldCount < hold) {
+                ++st.heldCount;
+                continue;                                   // hold this sighting; re-decide next frame
+            }
             out.plate.direction = phys;
             st.emittedEarly = true;
             st.lastSentDir   = phys;
-            emitPlate(std::move(out));                      // EARLY
+            emitPlate(std::move(out));                      // EARLY (now usually with a settled direction)
         } else if (phys != 0 && phys != st.lastSentDir) {
             out.plate.direction = phys;
             out.forceSend       = true;                     // CORRECTION (bypass cooldown)

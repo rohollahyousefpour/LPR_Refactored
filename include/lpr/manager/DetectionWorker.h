@@ -117,7 +117,7 @@ private:
     // Per-pass state (key = gate + ":" + plate text) for early-announce + correction:
     // a stable passId reused across the pass, whether the early event fired, and the
     // last physical direction sent (to avoid re-sending an unchanged direction).
-    struct PassState { std::string passId; std::string text; long lastSeenMs = 0; long lastInterval = 0; bool emittedEarly = false; int lastSentDir = -1; };
+    struct PassState { std::string passId; std::string text; long lastSeenMs = 0; long lastInterval = 0; bool emittedEarly = false; int lastSentDir = -1; int heldCount = 0; };
     std::unordered_map<std::string, PassState> passes_;
     // Last enter/exit direction we LOGGED per gate, so the direction line can label
     // a first announce vs a later CORRECTION/flip (for debugging wrong enter/exit).

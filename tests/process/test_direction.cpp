@@ -263,5 +263,46 @@ int main() {
         LPR_CHECK(df.update("g:PKF", 40, 100, 1200) == DirectionEstimator::Unknown);
     }
 
+    // ── Receding STRICTNESS (recedingBias): an exit needs proportionally stronger
+    // evidence than an entry, so size-noise on a one-directional (approaching) gate
+    // does not fake an «خروج». ──
+    {
+        // A mild shrink (ratio 0.80) that WOULD be Receding at bias=1.0 is rejected
+        // when recedingBias raises the shrink bar to 1/(1.15*1.6) ≈ 0.54.
+        DirectionEstimator::Config sc = cfg;   // window=1, minGrowthRatio=1.15
+        sc.recedingBias = 1.6;
+        DirectionEstimator d(sc);
+        d.update("g:RB", 50, 100, 1000);
+        d.update("g:RB", 45, 100, 1100);
+        LPR_CHECK(d.update("g:RB", 40, 100, 1200) == DirectionEstimator::Unknown);  // 40/50=0.80 > 0.54
+        // A strong shrink still reads as Receding even with the higher bar.
+        DirectionEstimator d2(sc);
+        d2.update("g:RB2", 100, 100, 1000);
+        d2.update("g:RB2", 70, 100, 1100);
+        LPR_CHECK(d2.update("g:RB2", 45, 100, 1200) == DirectionEstimator::Receding); // 45/100=0.45 <= 0.54
+        // Approaching is UNAFFECTED by recedingBias (same growth threshold as before).
+        DirectionEstimator d3(sc);
+        d3.update("g:RB3", 30, 100, 1000);
+        d3.update("g:RB3", 34, 100, 1100);
+        LPR_CHECK(d3.update("g:RB3", 46, 100, 1200) == DirectionEstimator::Approaching); // 46/30=1.53
+    }
+    // recedingMinSightings: an exit is withheld until enough reads accumulate, even when
+    // the shrink is strong — a very short pass can't emit a (usually wrong) exit.
+    {
+        DirectionEstimator::Config sc = cfg;   // minSightings=3
+        sc.recedingBias = 1.0; sc.recedingMinSightings = 5; sc.confirmAgreeing = 1;
+        DirectionEstimator d(sc);
+        d.update("g:RM", 60, 100, 1000);
+        d.update("g:RM", 45, 100, 1100);
+        LPR_CHECK(d.update("g:RM", 30, 100, 1200) == DirectionEstimator::Unknown);  // strong shrink but only 3 reads
+        LPR_CHECK(d.update("g:RM", 25, 100, 1300) == DirectionEstimator::Unknown);  // 4 reads, still < 5
+        LPR_CHECK(d.update("g:RM", 20, 100, 1400) == DirectionEstimator::Receding); // 5 reads -> exit allowed
+        // Approaching is not gated by recedingMinSightings.
+        DirectionEstimator da(sc);
+        da.update("g:RMA", 30, 100, 1000);
+        da.update("g:RMA", 40, 100, 1100);
+        LPR_CHECK(da.update("g:RMA", 55, 100, 1200) == DirectionEstimator::Approaching); // 3 reads, entry OK
+    }
+
     return LPR_TEST_RESULT();
 }

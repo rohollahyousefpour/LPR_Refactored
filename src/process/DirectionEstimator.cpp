@@ -78,16 +78,23 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
     if (s0 <= 0) return Unknown;
     const double ratio = s1 / s0;
 
+    // A Receding (exit) call must clear a HIGHER bar than Approaching (recedingBias >= 1):
+    // the shrink ratio, the slow-path net delta and the peak offset are all scaled up, so
+    // size-noise on a short pass at a one-directional gate can't fake an exit.
+    const double recBias  = std::max(1.0, cfg_.recedingBias);
+    const double recRatio = 1.0 / (cfg_.minGrowthRatio * recBias);   // <= this => receding
+
     int dir = Unknown;
-    if (ratio >= cfg_.minGrowthRatio)            dir = Approaching;   // plate grew -> approaching
-    else if (ratio <= 1.0 / cfg_.minGrowthRatio) dir = Receding;    // plate shrank -> receding
+    if (ratio >= cfg_.minGrowthRatio) dir = Approaching;             // plate grew -> approaching
+    else if (ratio <= recRatio)       dir = Receding;               // plate shrank enough -> receding
     else if ((int)t.sizes.size() >= cfg_.trendMinSightings &&
              std::fabs(s1 - s0) >= cfg_.minTrendDeltaPx) {
         // Slow / stopping vehicle: the size barely changes so the ratio never crosses
         // minGrowthRatio, but with this many consistent sightings a small net size
         // change is a reliable trend. (A symmetric approach-then-leave nets ~0 px and
         // stays Unknown, so a car that merely pauses in view is not mislabeled.)
-        dir = (s1 > s0) ? Approaching : Receding;
+        if (s1 > s0) dir = Approaching;
+        else if (std::fabs(s1 - s0) >= cfg_.minTrendDeltaPx * recBias) dir = Receding;
     }
 
     // Peak-position fallback: the first-vs-last averages can wash out a clear
@@ -111,9 +118,16 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
         const bool interior = maxIdx > 0 && maxIdx + 1 < t.sizes.size();
         if (interior && mn > 0 && mx / mn >= cfg_.peakMinSpread) {
             const double rel = (double)maxIdx / (double)(t.sizes.size() - 1);  // 0..1
-            if      (rel >= 0.5 + cfg_.peakBias) dir = Approaching;
-            else if (rel <= 0.5 - cfg_.peakBias) dir = Receding;
+            if      (rel >= 0.5 + cfg_.peakBias)           dir = Approaching;
+            else if (rel <= 0.5 - cfg_.peakBias * recBias) dir = Receding;   // stricter early-peak -> exit
         }
+    }
+
+    // Extra guard for exits: a Receding call needs at least recedingMinSightings reads
+    // (when configured above minSightings), so a very short noisy pass can't emit an exit.
+    if (dir == Receding && cfg_.recedingMinSightings > cfg_.minSightings &&
+        (int)t.sizes.size() < cfg_.recedingMinSightings) {
+        dir = Unknown;
     }
 
     if (dir != Unknown && cfg_.requireYAgree) {

@@ -57,6 +57,23 @@ public:
         //     symmetric approach-then-leave (peak in the middle) stays Unknown.
         double peakMinSpread     = 1.08;
         double peakBias          = 0.15;
+        // Asymmetric strictness for a RECEDING (exit) call. On a one-directional gate
+        // (all traffic approaching) a "receding" is almost always size-noise on a short
+        // pass, not a real exit. recedingBias (>= 1) makes Receding require proportionally
+        // stronger evidence than Approaching across ALL paths: the shrink ratio must reach
+        // 1/(minGrowthRatio*recedingBias), the slow-path net shrink must reach
+        // minTrendDeltaPx*recedingBias, and the peak must sit further off-centre
+        // (peakBias*recedingBias). 1.0 = symmetric (legacy). recedingMinSightings, when
+        // > minSightings, additionally requires that many reads before ANY Receding call,
+        // so a 2-3 frame noisy pass can never produce a (usually wrong) exit.
+        double recedingBias        = 1.0;
+        int    recedingMinSightings = 0;
+        // DetectionWorker announce-hold (not used by the estimator itself; carried here so
+        // it flows through the same live setDirectionConfig path). When > 0, the worker
+        // holds a pass's FIRST announce until the direction has settled (non-Unknown) or
+        // this many sightings have been held — so the first stored row already carries
+        // entry/exit instead of «unknown». 0 = announce immediately (legacy).
+        int    announceHoldSightings = 0;
     };
 
     DirectionEstimator() = default;
