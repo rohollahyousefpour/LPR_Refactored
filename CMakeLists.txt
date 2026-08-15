@@ -464,12 +464,25 @@ if(OpenCV_FOUND)
     endif()
   endif()
 
-  # ---- Pylon/Basler is deliberately NOT copied next to the exe. The Pylon runtime loads
-  #      GenTL transport-layer producers (.cti) and GenICam XML from its install tree via
-  #      its own environment (PYLON_ROOT / GENICAM_GENTL64_PATH). App-local Pylon is
-  #      unsupported and breaks camera discovery. Keep the Pylon SDK installed on the target.
+  # ---- Windows: bundle the COMPLETE Pylon runtime next to lpr.exe (self-contained GigE).
+  #      IMPORTANT: $<TARGET_RUNTIME_DLLS> above copies ONLY the 3 directly-linked Pylon DLLs
+  #      (PylonBase/PylonUtility/PylonGUI). The GenICam stack (GenApi/GCBase/NodeMapData/
+  #      XmlParser/log4cpp) and the GenTL *.cti producers are loaded DYNAMICALLY, so they are
+  #      NOT caught → a PARTIAL app-local Pylon that BREAKS GigE camera discovery (it also
+  #      becomes sensitive to a foreign zlib like OpenCV's z.dll shadowing the GenICam one).
+  #      Copying the WHOLE runtime makes the app self-consistent AND removes the need to install
+  #      the full Pylon SDK on an air-gapped target (only the GigE filter driver is still needed).
   if(WIN32 AND WITH_PYLON AND pylon_FOUND)
-    message(STATUS "  * Pylon left installed (NOT app-local): it loads .cti producers from its own runtime")
+    get_filename_component(_pylon_rt "${PYLON_ROOT}/../Runtime/x64" ABSOLUTE)
+    if(EXISTS "${_pylon_rt}")
+      add_custom_command(TARGET lpr_client POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${_pylon_rt}" "$<TARGET_FILE_DIR:lpr_client>"
+        COMMENT "Bundling the COMPLETE Pylon runtime next to lpr.exe (self-contained GigE)")
+      message(STATUS "  + Pylon runtime bundled next to lpr.exe (from ${_pylon_rt})")
+    else()
+      message(STATUS "  * Pylon runtime dir not found at ${_pylon_rt}; the target then needs the "
+                     "full Pylon runtime installed (GENICAM_GENTL64_PATH) for camera discovery")
+    endif()
   endif()
 
   message(STATUS "  + detection backend: OpenCV-DNN (always; portable CPU/ARM)")
