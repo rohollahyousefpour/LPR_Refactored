@@ -161,6 +161,9 @@ void CapturePipeline::run() {
                     catch (const std::exception& e) { AppLogger::LogException(e, "[capture] exposure " + t.serial); }
                     catch (...) { AppLogger::LogUnknownException("[capture] exposure " + t.serial); }
                 }
+                // Cache this sensor's latest frame by serial BEFORE moving it into the pair
+                // vector, so manual-live can fetch each sensor unambiguously (shallow, ref-counted).
+                { std::lock_guard<std::mutex> lk(ctx_.devMutex); ctx_.lastFrames[t.serial] = img; }
                 frames.push_back(std::move(img));
                 isColor.push_back(color ? 1 : 0);
             }

@@ -60,6 +60,14 @@ bool CameraManager::readExposureGain(const std::string& cameraId, const std::str
     return false;
 }
 
+bool CameraManager::latestFrame(const std::string& cameraId, const std::string& serial, cv::Mat& out) {
+    for (auto& w : workers_) {
+        if (w && w->gate() == cameraId)
+            return w->latestFrame(serial, out);
+    }
+    return false;
+}
+
 } // namespace lpr
 
 // --- settings-driven construction (bridge to the ported SettingsManager) ---

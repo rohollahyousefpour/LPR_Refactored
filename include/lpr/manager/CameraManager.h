@@ -58,6 +58,10 @@ public:
     bool readExposureGain(const std::string& cameraId, const std::string& serial,
                           double& exposureUs, double& gain);
 
+    // Fetch the latest frame a sub-camera (by serial) grabbed under the given camera id/gate,
+    // for the manual-control live view. False if the camera/serial is not available.
+    bool latestFrame(const std::string& cameraId, const std::string& serial, cv::Mat& out);
+
 private:
     std::vector<std::unique_ptr<CameraWorker>> workers_;
     CameraWorker::FrameSink rawObserver_;

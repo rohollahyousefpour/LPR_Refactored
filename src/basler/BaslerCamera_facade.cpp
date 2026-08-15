@@ -375,3 +375,11 @@ void BaslerCamera::handleCommand(const std::string& key, const json& value) {
 bool BaslerCamera::readAppliedExposureGain(const std::string& serial, double& exposureUs, double& gain) {
     return supervisor_ && supervisor_->readExposureGain(serial, exposureUs, gain);
 }
+
+bool BaslerCamera::latestFrame(const std::string& serial, cv::Mat& out) {
+    std::lock_guard<std::mutex> lk(ctx_.devMutex);
+    auto it = ctx_.lastFrames.find(serial);
+    if (it == ctx_.lastFrames.end() || it->second.empty()) return false;
+    out = it->second.clone();   // caller owns it; decouple from the live cache
+    return true;
+}

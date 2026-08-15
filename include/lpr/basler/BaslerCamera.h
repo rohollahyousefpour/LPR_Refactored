@@ -40,6 +40,9 @@ public:
     // Report the true applied exposure/gain for a sub-camera (mono or RGB) by serial.
     bool readAppliedExposureGain(const std::string& serial, double& exposureUs, double& gain) override;
 
+    // Fetch the latest grabbed frame for a sub-camera by serial (for the manual-control live view).
+    bool latestFrame(const std::string& serial, cv::Mat& out) override;
+
     // Re-read the camera's hardware settings and, if any changed since the last apply,
     // reconnect ONLY the affected cameras so exposure/GigE/AOI/trigger apply cleanly through
     // the tested connect path (a ~1-2s per-camera blip; the rest of the pipeline keeps running).

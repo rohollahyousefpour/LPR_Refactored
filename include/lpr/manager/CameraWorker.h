@@ -79,6 +79,9 @@ public:
     // Read the exposure (us) + gain a sub-camera (by serial) actually holds now.
     bool readExposureGain(const std::string& serial, double& exposureUs, double& gain);
 
+    // Fetch the latest frame a sub-camera (by serial) grabbed, for the manual-control live view.
+    bool latestFrame(const std::string& serial, cv::Mat& out);
+
     void start();
     void stop();
     bool isRunning() const { return running_; }

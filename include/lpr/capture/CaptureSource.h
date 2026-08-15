@@ -43,6 +43,11 @@ public:
     virtual bool readAppliedExposureGain(const std::string& /*serial*/,
                                          double& /*exposureUs*/, double& /*gain*/) { return false; }
 
+    // Fetch the latest grabbed frame for a sub-camera by serial. Default: unsupported (false).
+    // Basler overrides it so the manual-control live view can show EACH sensor of a pair
+    // independently (the paired frame bus loses per-serial identity). `out` is set only on true.
+    virtual bool latestFrame(const std::string& /*serial*/, cv::Mat& /*out*/) { return false; }
+
 protected:
     void emitFrame(const cv::Mat& f, const cv::Mat& m, long t) { if (frameCb_) frameCb_(f, m, t); }
     void emitError() { if (errorCb_) errorCb_(); }

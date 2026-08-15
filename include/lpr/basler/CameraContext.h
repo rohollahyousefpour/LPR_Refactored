@@ -20,6 +20,8 @@
 #include <mutex>
 #include <string>
 
+#include <opencv2/core.hpp>
+
 #include "CameraDevice.h"
 #include "IExposureStrategy.h"
 #include "ISyncConfigurator.h"
@@ -32,6 +34,12 @@ struct CameraContext {
     std::map<std::string, std::unique_ptr<CameraDevice>>      devices;   // serial -> device
     std::map<std::string, std::unique_ptr<IExposureStrategy>> exposure;  // serial -> policy
     std::map<std::string, std::shared_ptr<ISyncConfigurator>> syncRole;  // serial -> role
+    // Latest grabbed BGR frame per serial (guarded by devMutex). Lets the manual-control
+    // live view fetch EACH sensor of a pair by its own serial -- the paired frame bus
+    // (onFramePair) collapses the two Mats and loses which serial is which, so a same-kind
+    // (e.g. color+color) pair could otherwise be shown/labelled swapped. Fetch-by-serial is
+    // unambiguous. Kept small (one frame per camera) and only read on demand.
+    std::map<std::string, cv::Mat>                            lastFrames; // serial -> latest BGR
 
     CommandQueue      commands;          // thread-safe on its own
     std::atomic<bool> live{false};

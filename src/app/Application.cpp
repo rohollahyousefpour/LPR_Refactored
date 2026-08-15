@@ -288,10 +288,20 @@ void Application::publishManualLive(const FrameItem& f) {
     };
 
     std::vector<MediaSender::ManualLiveCam> cams;
-    if (!f.evidenceImage.empty() && !monoSerial.empty()) {
-        // mono+RGB pair: evidenceImage = RGB (CameraAddress), image = mono (MonoCameraAddress)
-        MediaSender::ManualLiveCam rgb;  rgb.serial = rgbSerial;  rgb.role = "rgb";  rgb.image = f.evidenceImage; fill(rgb);
-        MediaSender::ManualLiveCam mono; mono.serial = monoSerial; mono.role = "mono"; mono.image = f.image;        fill(mono);
+    if (!monoSerial.empty()) {
+        // mono+RGB pair: fetch EACH sensor by its OWN serial so the two live views are matched
+        // to the right camera. The paired frame bus (onFramePair) collapses the two Mats and
+        // loses which serial is which -- for a same-kind (e.g. color+color) pair that would swap
+        // them. latestFrame(serial) is unambiguous; fall back to the paired frame's two Mats
+        // (evidenceImage=RGB, image=mono) when the source can't serve by serial.
+        cv::Mat rgbImg, monoImg;
+        const bool haveRgb  = cameras_ && cameras_->latestFrame(f.gate, rgbSerial,  rgbImg)  && !rgbImg.empty();
+        const bool haveMono = cameras_ && cameras_->latestFrame(f.gate, monoSerial, monoImg) && !monoImg.empty();
+
+        MediaSender::ManualLiveCam rgb;  rgb.serial = rgbSerial;  rgb.role = "rgb";
+        rgb.image = haveRgb ? rgbImg : (f.evidenceImage.empty() ? f.image : f.evidenceImage); fill(rgb);
+        MediaSender::ManualLiveCam mono; mono.serial = monoSerial; mono.role = "mono";
+        mono.image = haveMono ? monoImg : f.image; fill(mono);
         cams.push_back(std::move(rgb));
         cams.push_back(std::move(mono));
     } else {
