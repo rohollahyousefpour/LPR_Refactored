@@ -10,40 +10,102 @@ namespace UCP = Basler_UniversalCameraParams;
 
 namespace {
 
-// ---- Node access (legacy *Raw or modern float), unit-agnostic to the caller --
+// ---- Node access: exposure/gain live under one of three SFNC generations.
+// Modern USB3/SFNC-2 uses the float ExposureTime/Gain; GigE SFNC-1 (e.g. the
+// acA1920-40gc) uses the float ExposureTimeAbs/GainAbs (us / dB); the oldest
+// firmware uses the integer ExposureTimeRaw/GainRaw. We pick by which node is
+// actually attached (IsReadable) -- NOT by writability, because a node is
+// read-only while the camera's own auto still owns it, and probing the wrong
+// generation's node throws "No node attached". Callers switch auto OFF (via
+// ensureManual) before writing so the chosen node becomes writable. -----------
+enum class ExpKind  { Modern, Abs, Raw, None };
+enum class GainKind { Modern, Abs, Raw, None };
 
-bool readExposureGain(CameraDevice::PylonCamera* c,
-                      double& exposure, double& gain, bool& useRaw) {
-    if (c->ExposureTimeRaw.IsWritable() && c->GainRaw.IsWritable()) {
-        exposure = c->ExposureTimeRaw.GetValue();
-        gain     = c->GainRaw.GetValue();
-        useRaw   = true; return true;
-    }
-    if (c->ExposureTime.IsWritable() && c->Gain.IsWritable()) {
-        exposure = c->ExposureTime.GetValue();
-        gain     = c->Gain.GetValue();
-        useRaw   = false; return true;
-    }
-    return false;
+ExpKind pickExposure(CameraDevice::PylonCamera* c) {
+    if (c->ExposureTime.IsReadable())    return ExpKind::Modern;
+    if (c->ExposureTimeAbs.IsReadable()) return ExpKind::Abs;
+    if (c->ExposureTimeRaw.IsReadable()) return ExpKind::Raw;
+    return ExpKind::None;
+}
+GainKind pickGain(CameraDevice::PylonCamera* c) {
+    if (c->Gain.IsReadable())    return GainKind::Modern;
+    if (c->GainAbs.IsReadable()) return GainKind::Abs;
+    if (c->GainRaw.IsReadable()) return GainKind::Raw;
+    return GainKind::None;
 }
 
-double nodeExposureMin(CameraDevice::PylonCamera* c, bool useRaw) {
-    return useRaw ? double(c->ExposureTimeRaw.GetMin()) : c->ExposureTime.GetMin();
+double expMinOf(CameraDevice::PylonCamera* c, ExpKind k) {
+    switch (k) { case ExpKind::Modern: return c->ExposureTime.GetMin();
+                 case ExpKind::Abs:    return c->ExposureTimeAbs.GetMin();
+                 case ExpKind::Raw:    return double(c->ExposureTimeRaw.GetMin());
+                 default:              return 0.0; }
 }
-double readExposure(CameraDevice::PylonCamera* c, bool useRaw) {
-    return useRaw ? double(c->ExposureTimeRaw.GetValue()) : c->ExposureTime.GetValue();
+double expMaxOf(CameraDevice::PylonCamera* c, ExpKind k) {
+    switch (k) { case ExpKind::Modern: return c->ExposureTime.GetMax();
+                 case ExpKind::Abs:    return c->ExposureTimeAbs.GetMax();
+                 case ExpKind::Raw:    return double(c->ExposureTimeRaw.GetMax());
+                 default:              return 0.0; }
+}
+double expValOf(CameraDevice::PylonCamera* c, ExpKind k) {
+    switch (k) { case ExpKind::Modern: return c->ExposureTime.GetValue();
+                 case ExpKind::Abs:    return c->ExposureTimeAbs.GetValue();
+                 case ExpKind::Raw:    return double(c->ExposureTimeRaw.GetValue());
+                 default:              return 0.0; }
+}
+double gnMinOf(CameraDevice::PylonCamera* c, GainKind k) {
+    switch (k) { case GainKind::Modern: return c->Gain.GetMin();
+                 case GainKind::Abs:    return c->GainAbs.GetMin();
+                 case GainKind::Raw:    return double(c->GainRaw.GetMin());
+                 default:               return 0.0; }
+}
+double gnMaxOf(CameraDevice::PylonCamera* c, GainKind k) {
+    switch (k) { case GainKind::Modern: return c->Gain.GetMax();
+                 case GainKind::Abs:    return c->GainAbs.GetMax();
+                 case GainKind::Raw:    return double(c->GainRaw.GetMax());
+                 default:               return 0.0; }
+}
+double gnValOf(CameraDevice::PylonCamera* c, GainKind k) {
+    switch (k) { case GainKind::Modern: return c->Gain.GetValue();
+                 case GainKind::Abs:    return c->GainAbs.GetValue();
+                 case GainKind::Raw:    return double(c->GainRaw.GetValue());
+                 default:               return 0.0; }
 }
 
-void writeExposure(CameraDevice::PylonCamera* c, double value, bool useRaw) {
+// Switch the camera's own auto OFF so the manual exposure/gain nodes become
+// writable. Must run BEFORE reading node min/max in any manual setter.
+void ensureManual(CameraDevice::PylonCamera* c) {
+    if (c->ExposureAuto.IsWritable()) c->ExposureAuto.SetValue(UCP::ExposureAuto_Off);
+    if (c->GainAuto.IsWritable())     c->GainAuto.SetValue(UCP::GainAuto_Off);
+    if (c->ExposureMode.IsWritable()) c->ExposureMode.SetValue(UCP::ExposureMode_Timed);
+}
+
+void writeExposure(CameraDevice::PylonCamera* c, double value, ExpKind k) {
     if (c->ExposureAuto.IsWritable()) c->ExposureAuto.SetValue(UCP::ExposureAuto_Off);
     if (c->ExposureMode.IsWritable()) c->ExposureMode.SetValue(UCP::ExposureMode_Timed);
-    if (useRaw && c->ExposureTimeRaw.IsWritable()) c->ExposureTimeRaw.SetValue(int64_t(value));
-    else if (c->ExposureTime.IsWritable())         c->ExposureTime.SetValue(value);
+    switch (k) {
+        case ExpKind::Modern: if (c->ExposureTime.IsWritable())    c->ExposureTime.SetValue(value); break;
+        case ExpKind::Abs:    if (c->ExposureTimeAbs.IsWritable()) c->ExposureTimeAbs.SetValue(value); break;
+        case ExpKind::Raw:    if (c->ExposureTimeRaw.IsWritable()) c->ExposureTimeRaw.SetValue(int64_t(value)); break;
+        default: break;
+    }
 }
-void writeGain(CameraDevice::PylonCamera* c, double value, bool useRaw) {
+void writeGain(CameraDevice::PylonCamera* c, double value, GainKind k) {
     if (c->GainAuto.IsWritable()) c->GainAuto.SetValue(UCP::GainAuto_Off);
-    if (useRaw && c->GainRaw.IsWritable()) c->GainRaw.SetValue(int64_t(value));
-    else if (c->Gain.IsWritable())         c->Gain.SetValue(value);
+    switch (k) {
+        case GainKind::Modern: if (c->Gain.IsWritable())    c->Gain.SetValue(value); break;
+        case GainKind::Abs:    if (c->GainAbs.IsWritable()) c->GainAbs.SetValue(value); break;
+        case GainKind::Raw:    if (c->GainRaw.IsWritable()) c->GainRaw.SetValue(int64_t(value)); break;
+        default: break;
+    }
+}
+
+bool readExposureGain(CameraDevice::PylonCamera* c,
+                      double& exposure, double& gain, ExpKind& ek, GainKind& gk) {
+    ek = pickExposure(c); gk = pickGain(c);
+    if (ek == ExpKind::None || gk == GainKind::None) return false;
+    exposure = expValOf(c, ek);
+    gain     = gnValOf(c, gk);
+    return true;
 }
 
 // ---- Robust metering: percentile over an ROI of a downscaled gray image ----
@@ -112,7 +174,7 @@ void AutoExposureStrategy::apply(CameraDevice& dev, const cv::Mat& bgr) {
             (std::chrono::duration_cast<std::chrono::milliseconds>(now - lastLog_) >=
              std::chrono::milliseconds(3000));
         auto status = [&](const char* state) {
-            double e = 0, g = 0; bool raw = false; readExposureGain(c, e, g, raw);
+            double e = 0, g = 0; ExpKind ek; GainKind gk; readExposureGain(c, e, g, ek, gk);
             LOGI() << "[auto-exposure][" << dev.serial() << "] " << state
                    << " measured=" << measured << " ema=" << m << " target=" << desired
                    << " exposure=" << e << "us gain=" << g
@@ -135,14 +197,14 @@ void AutoExposureStrategy::apply(CameraDevice& dev, const cv::Mat& bgr) {
         if (c->GainAuto.IsWritable())     c->GainAuto.SetValue(UCP::GainAuto_Off);
         if (c->ExposureMode.IsWritable()) c->ExposureMode.SetValue(UCP::ExposureMode_Timed);
 
-        double exposure, gain; bool useRaw;
-        if (!readExposureGain(c, exposure, gain, useRaw)) {
+        double exposure, gain; ExpKind ek; GainKind gk;
+        if (!readExposureGain(c, exposure, gain, ek, gk)) {
             LOGW() << "[auto-exposure][" << dev.serial()
-                   << "] no writable exposure/gain nodes (checked ExposureTimeRaw/GainRaw and "
-                      "ExposureTime/Gain)";
+                   << "] no exposure/gain nodes attached (tried ExposureTime/Abs/Raw and "
+                      "Gain/Abs/Raw)";
             return;
         }
-        const double expMin = nodeExposureMin(c, useRaw);
+        const double expMin = expMinOf(c, ek);
         const double expMax = regimeCap;             // motion-blur ceiling for THIS regime
         const double gMin   = double(lim_.minGain);
         const double gMax   = double(lim_.maxGain);
@@ -158,8 +220,8 @@ void AutoExposureStrategy::apply(CameraDevice& dev, const cv::Mat& bgr) {
         const ExposureDecision dec = decideExposure(m, exposure, gain, P);
         if (!dec.changed) { if (dueLog) status("HOLD no-op  "); return; }
 
-        if (std::fabs(dec.exposure - exposure) > 1.0) writeExposure(c, dec.exposure, useRaw);
-        if (std::fabs(dec.gain - gain) > 1e-6)        writeGain(c, dec.gain, useRaw);
+        if (std::fabs(dec.exposure - exposure) > 1.0) writeExposure(c, dec.exposure, ek);
+        if (std::fabs(dec.gain - gain) > 1e-6)        writeGain(c, dec.gain, gk);
         lastChange_ = now;
         // Always log an actual adjustment so you can WATCH the loop converge (reads back the
         // exposure/gain the camera actually accepted -- cap/interval limits show up here).
@@ -186,13 +248,14 @@ void ManualExposureStrategy::setNormalizedExposure(CameraDevice& dev, double nor
     auto* c = dev.raw(); if (!c) return;
     norm = std::clamp(norm, 0.0, 1.0);
     try {
-        const bool useRaw = c->ExposureTimeRaw.IsWritable();
-        const double lo = useRaw ? double(c->ExposureTimeRaw.GetMin()) : c->ExposureTime.GetMin();
-        const double hiNode = useRaw ? double(c->ExposureTimeRaw.GetMax()) : c->ExposureTime.GetMax();
+        ensureManual(c);
+        const ExpKind ek = pickExposure(c);
+        const double lo = expMinOf(c, ek);
+        const double hiNode = expMaxOf(c, ek);
         const double hi = std::min(hiNode, maxExposureUs);   // unified ceiling
         const double want = lo + norm * (hi - lo);
-        writeExposure(c, want, useRaw);
-        const double actual = readExposure(c, useRaw);       // read-back
+        writeExposure(c, want, ek);
+        const double actual = expValOf(c, ek);               // read-back
         if (std::fabs(actual - want) > std::max(2.0, 0.05 * want))
             LOGW() << "[manual-exposure][" << dev.serial() << "] requested " << want
                    << " clamped to " << actual;
@@ -212,10 +275,11 @@ void ManualExposureStrategy::setNormalizedGain(CameraDevice& dev, double norm) {
     auto* c = dev.raw(); if (!c) return;
     norm = std::clamp(norm, 0.0, 1.0);
     try {
-        const bool useRaw = c->GainRaw.IsWritable();
-        const double lo = useRaw ? double(c->GainRaw.GetMin()) : c->Gain.GetMin();
-        const double hi = useRaw ? double(c->GainRaw.GetMax()) : c->Gain.GetMax();
-        writeGain(c, lo + norm * (hi - lo), useRaw);
+        ensureManual(c);
+        const GainKind gk = pickGain(c);
+        const double lo = gnMinOf(c, gk);
+        const double hi = gnMaxOf(c, gk);
+        writeGain(c, lo + norm * (hi - lo), gk);
     }
     catch (const Pylon::GenericException& e) {
         AppLogger::LogPylonException(e.GetDescription(), "[manual-gain] " + dev.serial());
@@ -231,13 +295,14 @@ void ManualExposureStrategy::setNormalizedGain(CameraDevice& dev, double norm) {
 void ManualExposureStrategy::setExposureUs(CameraDevice& dev, double us, double maxExposureUs) {
     auto* c = dev.raw(); if (!c) return;
     try {
-        const bool useRaw = c->ExposureTimeRaw.IsWritable();
-        const double lo = useRaw ? double(c->ExposureTimeRaw.GetMin()) : c->ExposureTime.GetMin();
-        const double hiNode = useRaw ? double(c->ExposureTimeRaw.GetMax()) : c->ExposureTime.GetMax();
+        ensureManual(c);
+        const ExpKind ek = pickExposure(c);
+        const double lo = expMinOf(c, ek);
+        const double hiNode = expMaxOf(c, ek);
         const double hi = std::min(hiNode, maxExposureUs);   // never exceed the motion cap
         const double want = std::clamp(us, lo, hi);
-        writeExposure(c, want, useRaw);
-        const double actual = readExposure(c, useRaw);       // read-back
+        writeExposure(c, want, ek);
+        const double actual = expValOf(c, ek);               // read-back
         LOGI() << "[manual-exposure][" << dev.serial() << "] set " << want << "us"
                << (std::fabs(actual - want) > std::max(2.0, 0.05 * want)
                        ? (" (clamped to " + std::to_string(actual) + ")") : "");
@@ -250,11 +315,12 @@ void ManualExposureStrategy::setExposureUs(CameraDevice& dev, double us, double 
 void ManualExposureStrategy::setGainAbs(CameraDevice& dev, double gain) {
     auto* c = dev.raw(); if (!c) return;
     try {
-        const bool useRaw = c->GainRaw.IsWritable();
-        const double lo = useRaw ? double(c->GainRaw.GetMin()) : c->Gain.GetMin();
-        const double hi = useRaw ? double(c->GainRaw.GetMax()) : c->Gain.GetMax();
+        ensureManual(c);
+        const GainKind gk = pickGain(c);
+        const double lo = gnMinOf(c, gk);
+        const double hi = gnMaxOf(c, gk);
         const double want = std::clamp(gain, lo, hi);
-        writeGain(c, want, useRaw);
+        writeGain(c, want, gk);
         LOGI() << "[manual-gain][" << dev.serial() << "] set gain=" << want;
     }
     catch (const Pylon::GenericException& e) { AppLogger::LogPylonException(e.GetDescription(), "[manual-gain] " + dev.serial()); }
@@ -267,11 +333,12 @@ void ManualExposureStrategy::setGainAbs(CameraDevice& dev, double gain) {
 void FixedExposureStrategy::configure(CameraDevice& dev) {
     auto* c = dev.raw(); if (!c) return;
     try {
-        const bool useRawE = c->ExposureTimeRaw.IsWritable();
-        const bool useRawG = c->GainRaw.IsWritable();
-        writeExposure(c, exposureUs_, useRawE);
-        writeGain(c, gain_, useRawG);
-        const double actualE = readExposure(c, useRawE);
+        ensureManual(c);
+        const ExpKind ek = pickExposure(c);
+        const GainKind gk = pickGain(c);
+        writeExposure(c, exposureUs_, ek);
+        writeGain(c, gain_, gk);
+        const double actualE = expValOf(c, ek);
         applied_ = true;
         LOGI() << "[fixed-exposure][" << dev.serial() << "] set exposure="
                << exposureUs_ << "us (actual " << actualE << ") gain=" << gain_;

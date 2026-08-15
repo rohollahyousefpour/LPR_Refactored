@@ -350,9 +350,11 @@ bool ConnectionSupervisor::readExposureGain(const std::string& serial, double& e
     if (!c) return false;
     try {
         if      (c->ExposureTime.IsReadable())    exposureUs = c->ExposureTime.GetValue();
+        else if (c->ExposureTimeAbs.IsReadable()) exposureUs = c->ExposureTimeAbs.GetValue();  // GigE SFNC-1 (us)
         else if (c->ExposureTimeRaw.IsReadable()) exposureUs = double(c->ExposureTimeRaw.GetValue());
         else return false;
         if      (c->Gain.IsReadable())    gain = c->Gain.GetValue();
+        else if (c->GainAbs.IsReadable()) gain = c->GainAbs.GetValue();
         else if (c->GainRaw.IsReadable()) gain = double(c->GainRaw.GetValue());
         else gain = 0.0;
         return true;
