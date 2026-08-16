@@ -334,10 +334,40 @@ void DetectionWorker::process(FrameItem& item) {
 
     // Run each recognized plate through the processor (dedup/validate/tag) and sink the survivors.
     for (PlateResult& p : results) {
+        const std::string ptext = p.text;             // keep the read before the processor consumes it
         std::optional<PlateResult> kept =
             processor_ ? processor_(std::move(p))
                        : std::optional<PlateResult>(std::move(p));
-        if (!kept) continue;                          // processor dropped it (dup / invalid)
+        if (!kept) {
+            // The processor suppressed this read as a duplicate of an already-emitted pass.
+            // That is EXACTLY the frame on which a race-emitted pass tends to get its SETTLED
+            // direction: the early announce already went out (often «unknown»), and the OCR
+            // then de-dups every later read -- so the direction CORRECTION, which used to live
+            // only on the kept path below, never fired and the passage stayed «unknown». Emit
+            // it here too, from the gate-keyed pass state, so the backend back-fills the row in
+            // place (same passId). Guarded to the SAME plate so two interleaved vehicles are
+            // never cross-corrected.
+            if (!cfg_.directionEnable) continue;
+            PassState& st = passes_[item.gate];
+            const int phys = physicalDirection(item.gate, ptext);
+            const bool samePass = st.text.empty() || ptext.empty() ||
+                jaroWinklerDistance(st.text, ptext) >= cfg_.passPlateSimilarity;
+            if (st.emittedEarly && samePass && !st.passId.empty() &&
+                phys != 0 && phys != st.lastSentDir) {
+                st.lastSeenMs = nowMs;                 // this sighting keeps the pass alive
+                PlateItem corr;
+                corr.image           = evidence;
+                corr.gate            = item.gate;
+                corr.timestamp       = item.timestamp;
+                corr.plate.text      = ptext.empty() ? st.text : ptext;
+                corr.plate.passId    = st.passId;      // SAME pass -> backend updates in place
+                corr.plate.direction = phys;
+                corr.forceSend       = true;           // bypass the per-plate cooldown
+                st.lastSentDir       = phys;
+                emitPlate(std::move(corr));
+            }
+            continue;                                  // processor dropped it (dup / invalid)
+        }
 
         PlateItem out;
         // Detection ran on item.image (mono in a pair); the evidence/full_image is the RGB
