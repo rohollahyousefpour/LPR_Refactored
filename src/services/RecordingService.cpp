@@ -198,50 +198,67 @@ std::string RecordingService::segmentPath(const Rec& r) const {
 }
 
 void RecordingService::openSegment(const std::string& gate, Rec& r) {
-    std::string fc = cfg_.fourcc;
-    fc.resize(4, ' ');                                  // guard: pad/truncate to 4 chars
-    int fourcc = cv::VideoWriter::fourcc(fc[0], fc[1], fc[2], fc[3]);
     r.currentPath = segmentPath(r);
 
-    // Force SOFTWARE encoding. Some Windows FFMPEG builds bind avc1/H.264 to the hardware encoder
-    // h264_d3d12va, which only accepts d3d12 GPU surfaces (not the CPU BGR/yuv420p frames we feed)
-    // and fails to open the codec. VIDEO_ACCELERATION_NONE keeps H.264 but routes it through the
-    // software encoder (libx264), which accepts our frames and stays browser-playable.
-    const std::vector<int> params = { cv::VIDEOWRITER_PROP_HW_ACCELERATION,
-                                      cv::VIDEO_ACCELERATION_NONE };
+    // Preferred path: real H.264 via Media Foundation (h264_mf) driven through libavcodec directly
+    // — small, browser-playable, and needs NO extra DLL. cv::VideoWriter can't select this encoder,
+    // so we bypass it here and only fall back to the OpenCV chain (mp4v) if it's unavailable.
+    r.h264 = std::make_unique<FfmpegH264Writer>();
+    if (r.h264->open(r.currentPath, cfg_.fps, cfg_.frameSize, cfg_.crf)) {
+        LOGI() << "RecordingService[" << gate << "]: opened " << r.currentPath << " [H.264 Media Foundation]";
+        return;
+    }
+    r.h264.reset();   // h264_mf unavailable/failed -> OpenCV mp4v fallback below
 
-    // Tune libx264 for small files (only affects the software H.264 path; ignored by mp4v).
-    // Honored by OpenCV's FFMPEG backend when the writer is constructed.
-    {
-        const std::string opts = "preset;" + cfg_.x264Preset + "|crf;" + std::to_string(cfg_.crf);
+    // OPENCV_FFMPEG_WRITER_OPTIONS carries ENCODER-SPECIFIC private options. libx264's
+    // preset/crf are meaningless to (and rejected by) Media Foundation, so it is set only for the
+    // software-x264 attempt and cleared otherwise.
+    auto setOpts = [](const std::string& opts) {
 #if defined(_WIN32)
-        _putenv_s("OPENCV_FFMPEG_WRITER_OPTIONS", opts.c_str());
+        _putenv_s("OPENCV_FFMPEG_WRITER_OPTIONS", opts.c_str());   // "" clears it
 #else
-        setenv("OPENCV_FFMPEG_WRITER_OPTIONS", opts.c_str(), 1);
+        if (opts.empty()) unsetenv("OPENCV_FFMPEG_WRITER_OPTIONS");
+        else              setenv("OPENCV_FFMPEG_WRITER_OPTIONS", opts.c_str(), 1);
 #endif
-    }
+    };
+    const std::string x264opts = "preset;" + cfg_.x264Preset + "|crf;" + std::to_string(cfg_.crf);
 
-    bool ok = r.writer.open(r.currentPath, cv::CAP_FFMPEG, fourcc, cfg_.fps, cfg_.frameSize, params);
-    if (!ok || !r.writer.isOpened()) {
-        // Fallback: software MPEG-4 (mp4v) in the same .mp4 container.
-        LOGW() << "RecordingService[" << gate << "]: '" << cfg_.fourcc
-               << "' writer failed to open; falling back to mp4v (software)";
+    // Open the smallest codec this build can actually produce, first-to-open wins:
+    //   1. H.264 via ANY acceleration — on Windows this reaches the built-in Media Foundation
+    //      encoder (h264_mf): small, browser-playable, and needs NO extra DLL (mfplat is linked).
+    //   2. H.264 software — used if this FFMPEG has libx264/libopenh264 built in (LGPL vcpkg
+    //      builds usually don't, so this is a no-op there but harmless).
+    //   3. MPEG-4 (mp4v) — always present, ~3-5x larger; last resort so recording never fails.
+    struct Attempt { const char* fourcc; int accel; std::string opts; const char* label; };
+    const Attempt attempts[] = {
+        { "avc1", cv::VIDEO_ACCELERATION_ANY,  std::string(), "H.264 (Media Foundation / HW)" },
+        { "avc1", cv::VIDEO_ACCELERATION_NONE, x264opts,      "H.264 (software x264/openh264)" },
+        { "mp4v", cv::VIDEO_ACCELERATION_NONE, std::string(), "MPEG-4 mp4v (fallback)" },
+    };
+    for (const Attempt& a : attempts) {
+        std::string fc = a.fourcc; fc.resize(4, ' ');
+        const int fourcc = cv::VideoWriter::fourcc(fc[0], fc[1], fc[2], fc[3]);
+        const std::vector<int> params = { cv::VIDEOWRITER_PROP_HW_ACCELERATION, a.accel };
+        setOpts(a.opts);
         r.writer.release();
-        int fb = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
-        ok = r.writer.open(r.currentPath, cv::CAP_FFMPEG, fb, cfg_.fps, cfg_.frameSize, params);
+        if (r.writer.open(r.currentPath, cv::CAP_FFMPEG, fourcc, cfg_.fps, cfg_.frameSize, params)
+            && r.writer.isOpened()) {
+            LOGI() << "RecordingService[" << gate << "]: opened " << r.currentPath
+                   << " [" << a.label << "]";
+            return;
+        }
     }
-
-    if (ok && r.writer.isOpened())
-        LOGI() << "RecordingService[" << gate << "]: opened " << r.currentPath;
-    else
-        LOGE() << "RecordingService[" << gate << "]: failed to open " << r.currentPath
-               << " (size=" << cfg_.frameSize.width << "x" << cfg_.frameSize.height
-               << " fps=" << cfg_.fps << ")";
+    LOGE() << "RecordingService[" << gate << "]: failed to open " << r.currentPath
+           << " (size=" << cfg_.frameSize.width << "x" << cfg_.frameSize.height
+           << " fps=" << cfg_.fps << ")";
 }
 
 void RecordingService::closeSegment(const std::string& gate, Rec& r) {
-    if (r.writer.isOpened()) {
-        r.writer.release();
+    const bool wasOpen = (r.h264 && r.h264->isOpened()) || r.writer.isOpened();
+    if (r.h264 && r.h264->isOpened()) r.h264->close();   // flush + write trailer
+    if (r.writer.isOpened())          r.writer.release();
+    r.h264.reset();
+    if (wasOpen) {
         LOGI() << "RecordingService[" << gate << "]: closed " << r.currentPath;
         if (onSegment_ && !r.currentPath.empty()) onSegment_(gate, r.currentPath);
     }
@@ -258,7 +275,8 @@ void RecordingService::stampAndWrite(Rec& r, const cv::Mat& img) {
         cv::Point org((out.cols - ts.width) / 2, ts.height + 10);
         cv::putText(out, text, org, cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 255, 255), 2);
     }
-    r.writer.write(out);
+    if (r.h264 && r.h264->isOpened()) r.h264->write(out);
+    else                              r.writer.write(out);
 }
 
 bool RecordingService::startRecording(const std::string& gate, int durationSeconds) {
@@ -313,8 +331,11 @@ void RecordingService::onFrame(const std::string& gate, const cv::Mat& img) {
         ++r.segmentIndex;
         r.segmentStart = now;
     }
-    if (!r.writer.isOpened()) openSegment(gate, r);
-    if (r.writer.isOpened()) stampAndWrite(r, img);
+    // "A segment is open" means EITHER the H.264/MF writer or the mp4v fallback writer is open.
+    // Checking only r.writer (the old behavior) re-opened the file every frame in H.264 mode.
+    auto segOpen = [&r] { return (r.h264 && r.h264->isOpened()) || r.writer.isOpened(); };
+    if (!segOpen()) openSegment(gate, r);
+    if (segOpen())  stampAndWrite(r, img);
 }
 
 } // namespace lpr

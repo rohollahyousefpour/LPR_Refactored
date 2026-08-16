@@ -14,10 +14,13 @@
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 
+#include "lpr/services/FfmpegH264Writer.h"
+
 #include <chrono>
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -74,7 +77,8 @@ public:
 
 private:
     struct Rec {
-        cv::VideoWriter writer;
+        cv::VideoWriter writer;                        // fallback (mp4v) writer
+        std::unique_ptr<FfmpegH264Writer> h264;        // preferred: H.264 via Media Foundation
         std::string     baseName;       // path stem without segment suffix
         std::string     currentPath;    // currently-open segment file
         int             segmentIndex = 0;

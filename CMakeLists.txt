@@ -326,10 +326,24 @@ if(OpenCV_FOUND)
   # ---- services (recording, live view, command routing) ----
   add_library(lpr_services STATIC
     src/services/RecordingService.cpp
+    src/services/FfmpegH264Writer.cpp
     src/services/LiveViewService.cpp
     src/services/CommandRouter.cpp)
   target_include_directories(lpr_services PUBLIC include ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(lpr_services PUBLIC lpr_log lpr_json ${OpenCV_LIBS})
+  # Direct FFmpeg (avcodec/avformat/avutil/swscale) for the h264_mf recorder — small, browser-
+  # playable H.264 with no extra DLL (cv::VideoWriter can't select that encoder). Optional: without
+  # it, FfmpegH264Writer compiles as a stub and recording falls back to cv::VideoWriter (mp4v).
+  find_package(FFMPEG QUIET COMPONENTS avcodec avformat avutil swscale)
+  if(FFMPEG_FOUND)
+    target_include_directories(lpr_services PRIVATE ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(lpr_services PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(lpr_services PRIVATE ${FFMPEG_LIBRARIES})
+    target_compile_definitions(lpr_services PRIVATE LPR_WITH_FFMPEG)
+    message(STATUS "  + services: FFmpeg found -> H.264 (h264_mf) recorder enabled")
+  else()
+    message(STATUS "  + services: FFmpeg NOT found -> recorder uses cv::VideoWriter (mp4v) only")
+  endif()
   message(STATUS "  + services: Recording + LiveView + CommandRouter")
 
   # ---- messaging (plate sending + camera connect/disconnect; transport behind IMessageTransport) ----
