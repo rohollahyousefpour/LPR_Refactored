@@ -8,6 +8,8 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <filesystem>
+#include <cstdlib>
 
 #ifdef LPR_WITH_NATS
 #include "lpr/net/NatsTransport.h"
@@ -557,8 +559,31 @@ void Application::bootstrapFromJson(const json& settingsBody) {
         int rw = sm.getLpr<int>("recording_width").value_or(recCfg.frameSize.width);
         int rh = sm.getLpr<int>("recording_height").value_or(recCfg.frameSize.height);
         if (rw > 0 && rh > 0) recCfg.frameSize = cv::Size(rw, rh);
+        // Absolute, well-known recordings root (mirrors the log location) so files never depend on
+        // the launch directory; overridable via `recording_dir`.
+        {
+#if defined(_WIN32)
+            const char* pd = std::getenv("PROGRAMDATA");
+            std::filesystem::path base = pd ? std::filesystem::path(pd) : std::filesystem::path("C:\\ProgramData");
+            recCfg.baseDir = (base / "Hoshyar" / "ALPR" / "recordings").string();
+#else
+            recCfg.baseDir = "/var/lib/Hoshyar/ALPR/recordings";
+#endif
+            const std::string dir = sm.getLpr<std::string>("recording_dir").value_or("");
+            if (!dir.empty()) recCfg.baseDir = dir;
+        }
+        // Disk retention (RecordingService prunes on a timer): age + total-size cap + free floor.
+        recCfg.retentionDays = sm.getLpr<int>("recording_retention_days").value_or(recCfg.retentionDays);
+        const int maxGb  = sm.getLpr<int>("recording_max_gb")
+                               .value_or(int(recCfg.maxTotalBytes / (1024LL * 1024 * 1024)));
+        const int freeGb = sm.getLpr<int>("recording_min_free_gb")
+                               .value_or(int(recCfg.minFreeBytes / (1024LL * 1024 * 1024)));
+        recCfg.maxTotalBytes = (long long)std::max(0, maxGb)  * 1024 * 1024 * 1024;
+        recCfg.minFreeBytes  = (long long)std::max(0, freeGb) * 1024 * 1024 * 1024;
         LOGI() << "Application: recording " << recCfg.frameSize.width << "x" << recCfg.frameSize.height
-               << " @" << recCfg.fps << "fps crf=" << recCfg.crf << " (" << recCfg.x264Preset << ")";
+               << " @" << recCfg.fps << "fps crf=" << recCfg.crf << " (" << recCfg.x264Preset << ")"
+               << " dir=" << recCfg.baseDir << " retentionDays=" << recCfg.retentionDays
+               << " maxGB=" << maxGb << " minFreeGB=" << freeGb;
     }
     recording_ = std::make_unique<RecordingService>(recCfg);
     live_      = std::make_unique<LiveViewService>();

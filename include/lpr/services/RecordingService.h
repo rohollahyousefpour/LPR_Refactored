@@ -39,6 +39,17 @@ public:
         bool        timestampOverlay = true;     // burn a centered datetime into each frame
         std::string baseDir         = "recordings";  // <baseDir>/<gate>/<timestamp>/CAM_<gate>_<ts>
         int         watchdogMs      = 500;        // close timed-out recordings even if frames stop (0 = off)
+        // Disk retention: without it, segment files accumulate forever and fill the disk. Old
+        // files are pruned by AGE first, then (if still over budget) OLDEST-first until the total
+        // is back under the size cap. The currently-open segments are never touched. 0 disables
+        // either rule. Application.cpp overrides these from settings (recording_retention_days /
+        // recording_max_gb) so operators can tune retention without a rebuild.
+        int         retentionDays    = 14;                       // delete segments older than this (0 = off)
+        long long   maxTotalBytes    = 20LL * 1024 * 1024 * 1024; // cap total recordings size (0 = off)
+        long long   minFreeBytes     = 5LL * 1024 * 1024 * 1024;  // hard floor: keep this much disk free by
+                                                                  // deleting oldest segments (0 = off). A last
+                                                                  // resort even if the size cap is generous.
+        int         pruneIntervalSec = 3600;                     // how often the watchdog runs a prune pass
     };
 
     // Called when a segment file is finished (closed): (gate, filePath).
@@ -79,11 +90,15 @@ private:
     void        stampAndWrite(Rec& r, const cv::Mat& img);
     void        closeExpiredLocked();                            // caller holds mtx_
     void        watchdogLoop();
+    // Delete expired / over-budget segment files under baseDir (never the open ones).
+    void        pruneOldRecordings();
 
     Config            cfg_;
     SegmentCallback   onSegment_;
     mutable std::mutex mtx_;
     std::unordered_map<std::string, Rec> recs_;
+
+    std::chrono::steady_clock::time_point lastPrune_{};          // throttles pruneOldRecordings()
 
     std::thread             watchdog_;
     std::atomic<bool>       watchdogRunning_{false};

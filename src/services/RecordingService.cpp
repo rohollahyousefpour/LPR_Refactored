@@ -7,6 +7,9 @@
 #include <ctime>
 #include <sstream>
 #include <iomanip>
+#include <vector>
+#include <algorithm>
+#include <cstdint>
 
 namespace lpr {
 
@@ -61,7 +64,107 @@ void RecordingService::watchdogLoop() {
                              [this] { return !watchdogRunning_.load(); });
         if (!watchdogRunning_) break;
         tick();
+        // Periodic disk retention, throttled to pruneIntervalSec (first pass runs promptly so a
+        // backlog from before this build is cleaned on boot). Filesystem I/O runs WITHOUT the
+        // watchdog lock held.
+        if (cfg_.pruneIntervalSec > 0 && (cfg_.retentionDays > 0 || cfg_.maxTotalBytes > 0)) {
+            const auto now = std::chrono::steady_clock::now();
+            const bool first = lastPrune_.time_since_epoch().count() == 0;
+            if (first || std::chrono::duration_cast<std::chrono::seconds>(now - lastPrune_).count()
+                             >= cfg_.pruneIntervalSec) {
+                lastPrune_ = now;
+                lk.unlock();
+                pruneOldRecordings();
+                lk.lock();
+            }
+        }
     }
+}
+
+void RecordingService::pruneOldRecordings() {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path base(cfg_.baseDir);
+    if (!fs::exists(base, ec)) return;
+
+    // Snapshot the segments currently open for writing — never delete those.
+    std::vector<fs::path> active;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        for (auto& kv : recs_)
+            if (!kv.second.currentPath.empty()) active.emplace_back(kv.second.currentPath);
+    }
+    auto isActive = [&](const fs::path& p) {
+        for (auto& a : active) { std::error_code e; if (fs::equivalent(p, a, e)) return true; }
+        return false;
+    };
+
+    struct Item { fs::path path; long long size; fs::file_time_type mtime; };
+    std::vector<Item> items;
+    long long total = 0;
+    for (auto it = fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const fs::path& p = it->path();
+        std::error_code e;
+        if (!fs::is_regular_file(p, e)) continue;
+        if (p.extension() != cfg_.extension) continue;   // only our segment files
+        if (isActive(p)) continue;
+        const auto sz = fs::file_size(p, e);          if (e) continue;
+        const auto mt = fs::last_write_time(p, e);    if (e) continue;
+        items.push_back({ p, (long long)sz, mt });
+        total += (long long)sz;
+    }
+
+    int deleted = 0; long long freed = 0;
+    auto tryRemove = [&](Item& it) {
+        std::error_code e;
+        if (fs::remove(it.path, e)) { ++deleted; freed += it.size; total -= it.size; it.size = 0; }
+    };
+
+    // 1) AGE — delete segments older than retentionDays.
+    if (cfg_.retentionDays > 0) {
+        const auto cutoff = fs::file_time_type::clock::now() - std::chrono::hours(24LL * cfg_.retentionDays);
+        for (auto& it : items) if (it.size > 0 && it.mtime < cutoff) tryRemove(it);
+    }
+    // Oldest-first ordering for the two byte-budget passes below.
+    std::sort(items.begin(), items.end(),
+              [](const Item& a, const Item& b) { return a.mtime < b.mtime; });
+
+    // 2) SIZE CAP — if still over budget, delete OLDEST-first until under.
+    if (cfg_.maxTotalBytes > 0) {
+        for (auto& it : items) {
+            if (total <= cfg_.maxTotalBytes) break;
+            if (it.size > 0) tryRemove(it);
+        }
+    }
+    // 3) FREE-SPACE FLOOR — hard safety net: if the disk is still tighter than minFreeBytes
+    //    (e.g. other data filled it), keep deleting OLDEST-first until the floor is met or we
+    //    run out of prunable segments. `space()` is re-read each step so we stop as soon as
+    //    enough is free.
+    if (cfg_.minFreeBytes > 0) {
+        std::error_code se;
+        for (auto& it : items) {
+            const auto sp = fs::space(base, se);
+            if (se || sp.available >= (std::uintmax_t)cfg_.minFreeBytes) break;
+            if (it.size > 0) tryRemove(it);
+        }
+    }
+
+    // 4) Best-effort: remove directories left empty by the deletions (deepest first).
+    if (deleted > 0) {
+        std::vector<fs::path> dirs;
+        for (auto it = fs::recursive_directory_iterator(base, fs::directory_options::skip_permission_denied, ec);
+             !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+            if (it->is_directory(ec)) dirs.push_back(it->path());
+        std::sort(dirs.begin(), dirs.end(),
+                  [](const fs::path& a, const fs::path& b) { return a.string().size() > b.string().size(); });
+        for (auto& d : dirs) { std::error_code e; fs::remove(d, e); }  // remove() only succeeds if empty
+    }
+
+    if (deleted > 0)
+        LOGI() << "RecordingService: pruned " << deleted << " old segment(s), freed "
+               << (freed / (1024 * 1024)) << " MB (retentionDays=" << cfg_.retentionDays
+               << ", maxGB=" << (cfg_.maxTotalBytes / (1024LL * 1024 * 1024)) << ")";
 }
 
 void RecordingService::closeExpiredLocked() {
