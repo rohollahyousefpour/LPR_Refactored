@@ -136,6 +136,20 @@ int DirectionEstimator::update(const std::string& key, double sizePx, double yCe
         if (dir == Receding  && dy > -cfg_.minYShiftPx) dir = Unknown;
     }
 
+    // Anti-false-exit (flip) guard: never call Receding (exit) while the plate is
+    // still at or near its LARGEST size in the pass. A receding verdict whose NEWEST
+    // read is essentially the peak is self-contradictory — the plate is closest right
+    // now, i.e. still approaching/at the apex, not leaving. This kills the busy/slow-
+    // pass flip where a genuinely entering (growing) plate momentarily dips the
+    // first-vs-last average and gets flipped to EXIT. A REAL exit shrinks, so its
+    // newest read sits well below the peak and passes this guard; the exit simply
+    // waits until actual shrinking is observed (favours entry, never loses a true exit).
+    if (dir == Receding && !t.sizes.empty()) {
+        double mx = t.sizes[0];
+        for (double v : t.sizes) if (v > mx) mx = v;
+        if (mx > 0 && t.sizes.back() >= cfg_.exitPeakGuardRatio * mx) dir = Unknown;
+    }
+
     if (dir == Unknown) return Unknown;                  // not enough signal yet -> keep watching
 
     // Certainty by agreement: count how many CONSECUTIVE images give the same direction.

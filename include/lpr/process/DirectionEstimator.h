@@ -68,6 +68,12 @@ public:
         // so a 2-3 frame noisy pass can never produce a (usually wrong) exit.
         double recedingBias        = 1.0;
         int    recedingMinSightings = 0;
+        // Anti-false-exit guard: a Receding (exit) call is SUPPRESSED while the plate's
+        // NEWEST read is still >= this fraction of the pass's LARGEST read — the plate is
+        // at/near its closest, so it cannot be leaving. Kills the flip where a growing
+        // (entering) plate briefly dips the average and gets mislabeled EXIT. A real exit
+        // shrinks below this and still fires. 1.0 disables the guard; ~0.9 is safe.
+        double exitPeakGuardRatio  = 0.90;
         // DetectionWorker announce-hold (not used by the estimator itself; carried here so
         // it flows through the same live setDirectionConfig path). When > 0, the worker
         // holds a pass's FIRST announce until the direction has settled (non-Unknown) or

@@ -352,6 +352,34 @@ void DetectionWorker::process(FrameItem& item) {
             const int phys = physicalDirection(item.gate, ptext);
             const bool samePass = st.text.empty() || ptext.empty() ||
                 jaroWinklerDistance(st.text, ptext) >= cfg_.passPlateSimilarity;
+            // (0) RELEASE A HELD EARLY ANNOUNCE. announce-hold stashes the first announce until
+            //     the direction settles; because the processor de-dups every later read of the
+            //     SAME pass, this de-dup path is the ONLY place a slow pass is re-seen -- so the
+            //     held plate MUST be freed here or it is read but never recorded. Release the
+            //     moment the direction settles, or when the hold window (announceHoldSightings,
+            //     counted in REAL sightings which grow every frame) elapses -- announced as
+            //     «unknown» rather than dropped. Same-plate guarded.
+            if (st.pendingEarly && samePass) {
+                const int sightings = dir_.sightingCount(item.gate);
+                const bool settled  = (phys != 0);
+                const bool expired  = (sightings - st.pendingSince) >= cfg_.direction.announceHoldSightings;
+                if (settled || expired) {
+                    st.lastSeenMs = nowMs;                 // this sighting keeps the pass alive
+                    st.pendingItem.plate.direction = phys; // settled trend, or 0/unknown on expiry
+                    st.emittedEarly = true;
+                    st.lastSentDir  = phys;
+                    st.pendingEarly = false;
+                    emitPlate(std::move(st.pendingItem));  // the announce that was held, now freed
+                }
+                continue;
+            }
+            if (st.pendingEarly && !samePass) {
+                // A different vehicle holds the gate before the held one settled: flush the held
+                // plate as «unknown» so it is still recorded, then let this read proceed.
+                st.pendingItem.plate.direction = 0;
+                st.pendingEarly = false;
+                emitPlate(std::move(st.pendingItem));
+            }
             if (st.emittedEarly && samePass && !st.passId.empty() &&
                 phys != 0 && phys != st.lastSentDir) {
                 st.lastSeenMs = nowMs;                 // this sighting keeps the pass alive
@@ -396,13 +424,22 @@ void DetectionWorker::process(FrameItem& item) {
             // by announceHoldSightings kept reads so a genuinely short/undecidable pass is
             // still announced (as unknown) and never lost. 0 => announce immediately (legacy).
             const int hold = cfg_.directionEnable ? cfg_.direction.announceHoldSightings : 0;
-            if (hold > 0 && phys == 0 && st.heldCount < hold) {
-                ++st.heldCount;
-                continue;                                   // hold this sighting; re-decide next frame
+            if (hold > 0 && phys == 0) {
+                // Hold the first announce for the direction to settle -- but STASH the plate so a
+                // later (de-duped) frame can still release it. The old code `continue`d and
+                // dropped it, relying on a future KEPT read; the processor de-dups every later
+                // read of the pass, so at low speed that read never comes and the plate was read
+                // but never recorded. The de-dup path above frees this within the hold window.
+                if (!st.pendingEarly)
+                    st.pendingSince = cfg_.directionEnable ? dir_.sightingCount(item.gate) : 0;
+                st.pendingEarly = true;
+                st.pendingItem  = std::move(out);
+                continue;
             }
             out.plate.direction = phys;
             st.emittedEarly = true;
             st.lastSentDir   = phys;
+            st.pendingEarly  = false;
             emitPlate(std::move(out));                      // EARLY (now usually with a settled direction)
         } else if (phys != 0 && phys != st.lastSentDir) {
             out.plate.direction = phys;

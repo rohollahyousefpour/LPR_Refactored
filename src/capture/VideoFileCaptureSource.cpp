@@ -43,9 +43,12 @@ void VideoFileCaptureSource::run() {
             LOGI() << "VideoFileCaptureSource: end of stream '" << address_ << "'";
             break;                        // clean end -> no emitError -> worker stops (play once)
         }
+        // No artificial inter-frame sleep: the frame sink now applies BACKPRESSURE for
+        // video (CameraManager wires pushBlocking), so the reader is paced by the
+        // detector and every frame is processed. A fixed delay here would only add
+        // latency and, with a slow detector, starve/drop nothing but waste wall-clock.
+        // (delayMs_ is retained for API compat but intentionally not used for video.)
         emitFrame(image, cv::Mat(), nowEpochSeconds());
-        if (delayMs_ > 0)
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs_));
     }
     running_ = false;
     cap_.release();

@@ -117,7 +117,15 @@ private:
     // Per-pass state (key = gate + ":" + plate text) for early-announce + correction:
     // a stable passId reused across the pass, whether the early event fired, and the
     // last physical direction sent (to avoid re-sending an unchanged direction).
-    struct PassState { std::string passId; std::string text; long lastSeenMs = 0; long lastInterval = 0; bool emittedEarly = false; int lastSentDir = -1; int heldCount = 0; };
+    // pendingEarly/pendingItem/pendingSince implement the announce-hold WITHOUT losing the
+    // plate: when the first announce is held for the direction to settle, the plate is STASHED
+    // here (not dropped). The processor de-dups every later read of the same pass, so the held
+    // announce is released from the de-dup path (see process()) as soon as the direction settles
+    // or the hold window elapses -- otherwise a slow vehicle was read but never recorded.
+    // pendingSince is the dir_ sighting count when the hold began, so the window is measured in
+    // REAL sightings (which grow every frame) not kept reads (which de-dup pins at 1).
+    struct PassState { std::string passId; std::string text; long lastSeenMs = 0; long lastInterval = 0; bool emittedEarly = false; int lastSentDir = -1;
+                       bool pendingEarly = false; PlateItem pendingItem; int pendingSince = 0; };
     std::unordered_map<std::string, PassState> passes_;
     // Last enter/exit direction we LOGGED per gate, so the direction line can label
     // a first announce vs a later CORRECTION/flip (for debugging wrong enter/exit).

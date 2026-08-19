@@ -8,15 +8,21 @@ namespace lpr {
 void CameraManager::addCamera(const CameraSourceParams& params, MotionConfig cfg) {
     CameraSourceParams p = params;
     auto factory = [p]() -> std::unique_ptr<CaptureSource> { return CameraSourceFactory::create(p); };
-    addCamera(p.gate, std::move(factory), cfg);
+    // Offline video -> backpressure the reader so NO frame is dropped (max sightings for
+    // the direction estimator). A live sensor stays drop-oldest (never stall it).
+    const bool isVideo = p.typeOfLink == "video";
+    addCamera(p.gate, std::move(factory), cfg, isVideo);
 }
 
-void CameraManager::addCamera(const std::string& gate, CameraWorker::SourceFactoryFn factory, MotionConfig cfg) {
+void CameraManager::addCamera(const std::string& gate, CameraWorker::SourceFactoryFn factory, MotionConfig cfg, bool backpressure) {
     auto worker = std::make_unique<CameraWorker>(gate, std::move(factory), cfg);
 
     if (out_) {
         std::shared_ptr<FrameQueue> q = out_;
-        worker->setFrameSink([q](FrameItem&& item) { q->push(std::move(item)); });
+        if (backpressure)
+            worker->setFrameSink([q](FrameItem&& item) { q->pushBlocking(std::move(item)); });
+        else
+            worker->setFrameSink([q](FrameItem&& item) { q->push(std::move(item)); });
     }
     if (status_)
         worker->setStatusCallback(status_);

@@ -17,16 +17,21 @@
 هر سه باید jumbo را پشتیبانی کنند: **کارتِ شبکهٔ ویندوز + سوییچ + خودِ دوربین**. دوربین‌های Basler ace پشتیبانی می‌کنند؛ کارت و سوییچ را باید بررسی کنید.
 
 ## گام ۱ — فعال‌سازیِ jumbo روی کارتِ شبکه (به‌عنوان Administrator)
-یک PowerShellِ **Run as administrator** باز کنید. نامِ کارت را با `Get-NetAdapter` پیدا کنید (اینجا `Ethernet`):
+یک PowerShellِ **Run as administrator** باز کنید — **روی همان کامپیوتری که دوربین‌ها به آن وصل‌اند** (نه لزوماً همان PCِ پنل).
 ```powershell
-# مقادیرِ مجازِ jumbo کارت را ببینید:
-Get-NetAdapterAdvancedProperty -Name 'Ethernet' -DisplayName 'Jumbo Packet' | Select ValidDisplayValues
-# فعال‌سازی (بزرگ‌ترین مقدار، معمولاً 9014):
-Set-NetAdapterAdvancedProperty -Name 'Ethernet' -DisplayName 'Jumbo Packet' -DisplayValue '9014 Bytes'
-# تأیید که MTU بالا رفت:
+# ۱) نامِ دقیقِ کارتِ کامرا را پیدا کنید (آن که Up است و IPش هم‌رنجِ دوربین‌هاست):
+Get-NetAdapter | ft Name,InterfaceDescription,Status,LinkSpeed
+# ۲) مقادیرِ مجازِ jumbo همان کارت را ببینید (نام را از خطِ بالا بگذارید):
+Get-NetAdapterAdvancedProperty -Name 'Ethernet' -DisplayName 'Jumbo*' |
+  fl DisplayName,DisplayValue,RegistryKeyword,ValidDisplayValues,ValidRegistryValues
+# ۳) فعال‌سازی با فرمِ عددیِ مطمئن (عدد را از ValidRegistryValues بردارید، معمولاً 9014):
+Set-NetAdapterAdvancedProperty -Name 'Ethernet' -RegistryKeyword '*JumboPacket' -RegistryValue 9014
+# ۴) تأیید که MTU بالا رفت:
 Get-NetAdapter -Name 'Ethernet' | Select Name,MtuSize   # باید ~9000 شود
 ```
 > ⚠️ فعال‌کردنِ jumbo **کارتِ شبکه را ری‌استارت می‌کند** و یک لحظه قطعی می‌دهد. اگر Docker/پلاک‌خوان روی همان شبکه‌اند، ممکن است **یک بار bounce شوند** و خودشان برگردند؛ اگر پلاک‌خوان برنگشت، دوباره اجرایش کنید.
+
+> 🛠 **اگر ارورِ «One or more parameter values passed to the method were invalid» گرفتید:** فرمِ `-DisplayValue '9014 Bytes'` روی بعضی درایورها (مثلِ Intel I219) به‌خاطرِ تطبیقِ دقیقِ رشته رد می‌شود. راهِ مطمئن، فرمِ عددیِ بالاست (`-RegistryKeyword '*JumboPacket' -RegistryValue 9014`). اگر باز هم رد شد یعنی آن عدد جزوِ `ValidRegistryValues` آن کارت نیست — عددِ بزرگ‌ترِ مجاز را از خروجیِ گامِ ۲ بردارید (ممکن است ۹۰۰۰ یا ۴۰۸۸ باشد). همچنین مطمئن شوید `Name` **دقیقاً** نامِ همان کارتِ کامراست (مثلاً «Ethernet 2»).
 
 ## گام ۲ — تأییدِ عبورِ jumbo از سوییچ (روشِ درست)
 > **با `ping` تست نکنید!** دوربینِ Basler به ICMP/ping پاسخ نمی‌دهد (حتی پینگِ کوچک هم timeout می‌شود). پس ping گمراه‌کننده است.
@@ -47,7 +52,7 @@ Get-NetAdapter -Name 'Ethernet' | Select Name,MtuSize   # باید ~9000 شود
 ## اگر کار نکرد (فریم‌ها ناقص یا قطعی)
 یعنی سوییچ jumbo را عبور نمی‌دهد. برگردید:
 - در پنل `gige_packet_size` را دوباره **۱۵۰۰** کنید.
-- (اختیاری) jumbo کارت را هم خاموش کنید: `Set-NetAdapterAdvancedProperty -Name 'Ethernet' -DisplayName 'Jumbo Packet' -DisplayValue 'Disabled'`.
+- (اختیاری) jumbo کارت را هم خاموش کنید: `Set-NetAdapterAdvancedProperty -Name 'Ethernet' -RegistryKeyword '*JumboPacket' -RegistryValue 1514` (۱۵۱۴ = غیرفعال / MTUِ استاندارد).
 - grab missهای گاه‌به‌گاه با pkt=1500 **بی‌خطرند** (خودترمیم، بدونِ ازدست‌رفتنِ فریم) — می‌توانید همان‌طور بمانید.
 
 ## نکاتِ ماندگاری
@@ -76,6 +81,8 @@ Get-NetAdapter -Name 'Ethernet' | Select Name,MtuSize   # باید ~9000 شود
 | `direction_receding_min_sightings` | ~۵ | **۰** |
 | `direction_min_sightings` | ۲ | ۲ |
 | `direction_announce_hold` | ۳ | ۳ |
+
+> **سرعتِ پایین (پلاک خوانده می‌شود ولی ثبت نمی‌شود):** وقتی خودرو آرام می‌آید، پلاک کند بزرگ می‌شود و جهت دیر تثبیت می‌شود. `direction_announce_hold` اولین ثبت را نگه می‌دارد تا جهت روشن شود؛ چون OCR بقیهٔ خوانش‌های همان پاس را dedup می‌کند، در نسخه‌های قدیمی آن ثبتِ نگه‌داشته هرگز آزاد نمی‌شد و پلاک **گم می‌شد**. نسخه‌های جدیدِ ماژول این ثبت را حتی روی فریمِ dedup‌شده آزاد می‌کنند (به‌محضِ تثبیتِ جهت یا پایانِ پنجرهٔ hold) پس دیگر گم نمی‌شود. **راهِ‌حلِ فوری روی نسخهٔ قدیمی بدونِ بیلدِ جدید:** `direction_announce_hold=0` بگذارید تا ثبت فوری انجام شود (جهت بعداً با حرکت اصلاح می‌شود).
 
 ## آستانه‌ها / OCR / رأی
 | کلید | نقش | پیشنهاد |

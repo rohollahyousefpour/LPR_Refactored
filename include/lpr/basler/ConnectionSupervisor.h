@@ -66,6 +66,11 @@ public:
     // invariant in CameraContext.
     void handleFault(const std::string& serial);
 
+    // Drop every per-camera packet-size override (jumbo auto-fallbacks). Called when the
+    // operator changes the global gige_packet_size so the new value takes effect on the
+    // next reconnect instead of a flapped camera staying pinned to its 1500 fallback.
+    void clearPacketOverrides();
+
     void stopAll();                        // stop + join every reconnect worker
 
 private:
@@ -106,8 +111,24 @@ private:
     std::mutex                          reconMutex_;
     std::map<std::string, Worker>       workers_;
     std::map<std::string, int>          attempts_;   // backoff state per serial
+    // (re)connect timestamp per serial. Used to tell a FLAPPING camera (opens fine
+    // but can't grab -> faults within seconds) from a genuine transient drop of a
+    // camera that had been running stably. The former escalates the backoff; the
+    // latter resets it. Guarded by reconMutex_.
+    std::map<std::string, std::chrono::steady_clock::time_point> connectedAt_;
+    // Per-camera packet-size override (bytes). Set by handleFault when a camera keeps
+    // FLAPPING on jumbo, so its next (re)connect uses standard 1500-byte packets while
+    // the healthy jumbo cameras are untouched. Read by applyBandwidth. Guarded by
+    // reconMutex_. Absent/0 => use the global gige_packet_size setting.
+    std::map<std::string, int64_t> packetOverride_;
 
     static constexpr int kBackoffBaseSec = 1;
     static constexpr int kBackoffCapSec  = 180;
     static constexpr int kMaxShift       = 12;
+    // A camera must stay connected at least this long for a later drop to count as
+    // "transient" (reset backoff). Drop sooner => flapping => escalate the backoff.
+    static constexpr int kStableResetSec = 30;
+    // After this many escalating flaps on JUMBO, auto-fall the camera back to 1500-byte
+    // packets (jumbo usually fails because it isn't passing end-to-end on that path).
+    static constexpr int kJumboFallbackShift = 3;
 };

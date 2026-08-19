@@ -102,6 +102,7 @@ private:
     bool   hasMono_ = false;   // true once a mono master is registered (=> pair)
     std::string monoSerial_;   // serial of the mono master (set via set_mono_adress), for role-preserving reconnect
     std::string lastHwSnapshot_;   // hwSnapshot() at last apply; reapplySettings() no-ops when unchanged
+    int lastPacketSize_ = -1;      // last-applied global gige_packet_size; a change clears per-camera fallbacks
 
     // Stereo rectification (carried over from the old BaslerCamera).
     bool enableStereo_ = false;

@@ -42,6 +42,23 @@ public:
         return !dropped;
     }
 
+    // Backpressure enqueue: BLOCK until there is room (or the queue closes), then
+    // enqueue WITHOUT dropping. For OFFLINE video sources where every frame must be
+    // processed so the direction estimator gets the maximum sightings — the producer
+    // is paced by the (slower) consumer instead of the queue silently dropping most
+    // frames. NEVER use for a LIVE camera: there you must not stall the sensor, so
+    // drop-oldest via push() is correct.
+    void pushBlocking(T value) {
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (maxSize_ > 0)
+                notFull_.wait(lock, [this] { return closed_ || queue_.size() < maxSize_; });
+            if (closed_) return;
+            queue_.push_back(std::move(value));
+        }
+        cv_.notify_one();
+    }
+
     // Block until an item is available or the queue is closed.
     // Returns std::nullopt only when the queue is closed AND drained.
     std::optional<T> pop() {
@@ -51,6 +68,7 @@ public:
             return std::nullopt;            // closed and empty
         T value = std::move(queue_.front());
         queue_.pop_front();
+        notFull_.notify_one();              // woke a backpressure producer, if any
         return value;
     }
 
@@ -65,6 +83,7 @@ public:
             return std::nullopt;            // closed and empty
         T value = std::move(queue_.front());
         queue_.pop_front();
+        notFull_.notify_one();              // woke a backpressure producer, if any
         return value;
     }
 
@@ -75,6 +94,7 @@ public:
             return false;
         out = std::move(queue_.front());
         queue_.pop_front();
+        notFull_.notify_one();              // woke a backpressure producer, if any
         return true;
     }
 
@@ -92,13 +112,15 @@ public:
     void clear() {
         { std::lock_guard<std::mutex> lock(mutex_); queue_.clear(); }
         cv_.notify_all();
+        notFull_.notify_all();              // room freed -> release backpressure producers
     }
 
     // Signal shutdown: wakes every blocked pop(); each returns nullopt once the
-    // queue is drained. Idempotent.
+    // queue is drained. Idempotent. Also releases any producer blocked in pushBlocking.
     void close() {
         { std::lock_guard<std::mutex> lock(mutex_); closed_ = true; }
         cv_.notify_all();
+        notFull_.notify_all();
     }
 
     bool isClosed() const {
@@ -109,6 +131,7 @@ public:
 private:
     mutable std::mutex      mutex_;
     std::condition_variable cv_;
+    std::condition_variable notFull_;       // wakes a pushBlocking() producer when room frees
     std::deque<T>           queue_;
     std::size_t             maxSize_;
     bool                    closed_ = false;

@@ -165,8 +165,13 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
             ctx_.devices[serial]  = std::move(device);
         }
 
-        // 5) Reset backoff for this serial.
-        { std::lock_guard<std::mutex> lk(reconMutex_); attempts_[serial] = 0; }
+        // 5) Record the (re)connect time. Do NOT reset the backoff here: a camera that
+        //    OPENS + configures fine but then can't GRAB (marginal cable, a switch/port
+        //    that won't pass jumbo, or an oversubscribed link) would otherwise reset to
+        //    "attempt #1, backoff 1s" on EVERY reconnect and hammer re-open + bandwidth
+        //    re-negotiation + GigE discovery forever. handleFault() resets the backoff
+        //    only after a genuinely STABLE run (>= kStableResetSec); a quick drop escalates.
+        { std::lock_guard<std::mutex> lk(reconMutex_); connectedAt_[serial] = std::chrono::steady_clock::now(); }
 
         LOGI() << "[supervisor] connected " << serial;
         return true;
@@ -449,7 +454,17 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof
         //    frame fails, so set gige_packet_size back to 1500 for a non-jumbo network. The value
         //    is clamped to the camera's own supported min/max, and the byte math below uses the
         //    ACTUAL applied size (read back), so the bandwidth throttle stays correct either way.
-        const int64_t wantPkt = SettingsManager::instance().getLpr<int>("gige_packet_size").value_or(1500);
+        int64_t wantPkt = SettingsManager::instance().getLpr<int>("gige_packet_size").value_or(1500);
+        // Per-camera auto-fallback: if THIS camera has been flapping on jumbo, handleFault
+        // pins it to 1500 so it can recover without disturbing the healthy jumbo cameras.
+        { std::lock_guard<std::mutex> lk(reconMutex_);
+          auto ov = packetOverride_.find(serial);
+          if (ov != packetOverride_.end() && ov->second > 0) {
+              if (ov->second != wantPkt)
+                  LOGW() << "[supervisor][bw][" << serial << "] using per-camera packet override "
+                         << ov->second << " (global " << wantPkt << ") -- jumbo auto-fallback";
+              wantPkt = ov->second;
+          } }
         if (c->GevSCPSPacketSize.IsWritable()) {
             const int64_t pkt = std::clamp<int64_t>(wantPkt,
                 c->GevSCPSPacketSize.GetMin(), c->GevSCPSPacketSize.GetMax());
@@ -687,6 +702,48 @@ void ConnectionSupervisor::handleFault(const std::string& serial) {
     dead.reset();   // CameraDevice dtor stops/closes/detaches/destroys
     // NB: we deliberately do NOT unregister from the bandwidth coordinator, so
     // the camera keeps its stagger slot across the reconnect.
+
+    // Flapping vs transient. If the camera dropped SHORTLY after (re)connecting, it is
+    // unstable — it opens but the grab keeps failing (status=2 incomplete frames):
+    // typically a marginal cable, a switch/port that doesn't pass jumbo, or an
+    // oversubscribed link. ESCALATE the backoff so we stop re-opening + re-negotiating
+    // bandwidth + storming GigE discovery every second (which also spams the log and
+    // disturbs the healthy cameras' discovery). A camera that ran STABLE for a while
+    // and then dropped is a genuine transient loss -> RESET for a fast recovery.
+    {
+        std::lock_guard<std::mutex> lk(reconMutex_);
+        long stableSec = -1;
+        auto cit = connectedAt_.find(serial);
+        if (cit != connectedAt_.end()) {
+            stableSec = (long)std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now() - cit->second).count();
+            connectedAt_.erase(cit);
+        }
+        if (stableSec >= kStableResetSec) {
+            attempts_[serial] = 0;                                  // stable then dropped -> quick reconnect
+        } else {
+            const int a = (attempts_[serial] = std::min(attempts_[serial] + 1, kMaxShift));
+            if (a >= 3)
+                LOGW() << "[supervisor][" << serial << "] FLAPPING (opens but can't grab; dropped after "
+                       << (stableSec < 0 ? 0 : stableSec) << "s) -> backing off " << backoffSeconds(a)
+                       << "s. Check THIS camera's cable / switch-port jumbo (or lower gige_packet_size to 1500) / GigE bandwidth.";
+            // Auto-fallback: after several flaps on JUMBO, pin THIS camera to 1500-byte
+            // packets for its next (re)connect. Jumbo failing (incomplete frames) is
+            // almost always "jumbo not passing end-to-end on this path"; 1500 sidesteps
+            // it. Per-camera, so the healthy jumbo cameras keep their big packets.
+            if (a >= kJumboFallbackShift) {
+                const int64_t globalPkt = SettingsManager::instance().getLpr<int>("gige_packet_size").value_or(1500);
+                auto ovIt = packetOverride_.find(serial);
+                const bool alreadyPinned = ovIt != packetOverride_.end() && ovIt->second > 0 && ovIt->second <= 1500;
+                if (globalPkt > 1500 && !alreadyPinned) {
+                    packetOverride_[serial] = 1500;
+                    LOGW() << "[supervisor][" << serial << "] AUTO-FALLBACK: pinning packet size to 1500 (global jumbo "
+                           << globalPkt << ") after repeated flapping -- jumbo likely not passing on this camera's path. "
+                           << "It will retry at 1500 on the next reconnect.";
+                }
+            }
+        }
+    }
     startReconnect(serial);
 }
 
@@ -755,6 +812,15 @@ void ConnectionSupervisor::reconnectLoop(std::string serial) {
         if (openConfigureStore(serial)) return;   // success: attempts_ reset inside
         { std::lock_guard<std::mutex> lk(reconMutex_);
           attempts_[serial] = std::min(attempts_[serial] + 1, kMaxShift); }
+    }
+}
+
+void ConnectionSupervisor::clearPacketOverrides() {
+    std::lock_guard<std::mutex> lk(reconMutex_);
+    if (!packetOverride_.empty()) {
+        LOGI() << "[supervisor] cleared " << packetOverride_.size()
+               << " per-camera packet-size override(s) -- gige_packet_size changed, jumbo will be retried";
+        packetOverride_.clear();
     }
 }
 

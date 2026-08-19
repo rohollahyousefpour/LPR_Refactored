@@ -30,7 +30,10 @@ public:
     void addCamera(const CameraSourceParams& params, MotionConfig cfg = {});
 
     // Lower-level / testable: supply your own source factory.
-    void addCamera(const std::string& gate, CameraWorker::SourceFactoryFn factory, MotionConfig cfg = {});
+    // backpressure=true makes the frame sink BLOCK when the queue is full (never drop)
+    // — used for OFFLINE video so every frame is processed (max direction sightings).
+    // Live cameras pass false (drop-oldest: never stall the sensor).
+    void addCamera(const std::string& gate, CameraWorker::SourceFactoryFn factory, MotionConfig cfg = {}, bool backpressure = false);
 
     // Build all cameras from SettingsManager (camera ids + per-camera keys).
     // Frame-size-dependent ROI is applied later via the worker's first-frame hook.

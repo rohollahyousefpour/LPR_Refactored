@@ -56,6 +56,7 @@ BaslerCamera::BaslerCamera(int x, int y, int w, int h, std::string gate)
         // Baseline snapshot: a later settings save only reconnects a camera if a
         // hardware-relevant value has actually changed since this point.
         lastHwSnapshot_ = hwSnapshot();
+        lastPacketSize_ = SettingsManager::instance().getLpr<int>("gige_packet_size").value_or(1500);
     }
     catch (const std::exception& e) { AppLogger::LogException(e, "BaslerCamera ctor settings"); }
     catch (...) { AppLogger::LogUnknownException("BaslerCamera ctor settings"); }
@@ -163,6 +164,15 @@ void BaslerCamera::reapplySettings() {
         if (snap == lastHwSnapshot_) return;   // nothing that needs a reconnect changed
         lastHwSnapshot_ = snap;
         readSettings();                         // refresh members so buildProfile() uses new values
+
+        // If the operator changed the global packet size, drop any per-camera jumbo
+        // auto-fallbacks so the NEW value applies uniformly on the reconnect below
+        // (otherwise a previously-flapped camera would stay pinned to its 1500 fallback).
+        const int curPkt = SettingsManager::instance().getLpr<int>("gige_packet_size").value_or(1500);
+        if (curPkt != lastPacketSize_) {
+            lastPacketSize_ = curPkt;
+            if (supervisor_) supervisor_->clearPacketOverrides();
+        }
 
         std::vector<std::string> serials;
         {
