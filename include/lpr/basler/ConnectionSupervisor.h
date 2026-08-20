@@ -42,7 +42,13 @@ public:
 
         std::string pfsFile;               // optional Basler feature file
         AutoExposureStrategy::Limits exposureLimits;  // per-camera bounds + ROI
-        int x = 0, y = 0, w = 0, h = 0;    // ROI; 0 size => full frame
+        // Hardware sensor AOI crop, NORMALIZED (0..1) so it's resolution-independent.
+        // cropWn<=0 or cropHn<=0 => no crop (full frame). applyRoi() converts these to
+        // sensor pixels and aligns to the Width/Height/OffsetX/OffsetY node increments.
+        // Set per role in buildProfile(): the mono (plate) camera of a pair is always
+        // cropped (to the ROI polygon bbox or a manual rect); the colour camera crops
+        // only when its rgb_crop_enable is on. Cuts GigE bandwidth by shrinking the frame.
+        double cropXn = 0, cropYn = 0, cropWn = 0, cropHn = 0;
     };
 
     ConnectionSupervisor(CameraContext& ctx);

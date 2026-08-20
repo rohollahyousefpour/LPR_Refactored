@@ -554,4 +554,5 @@ if(LPR_BUILD_TESTS)
   add_subdirectory(tests/process)
   add_subdirectory(tests/services)
   add_subdirectory(tests/net)
+  add_subdirectory(tests/basler)   # hardware-AOI test via Pylon camera emulation
 endif()

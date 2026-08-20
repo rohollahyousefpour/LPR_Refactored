@@ -369,44 +369,59 @@ bool ConnectionSupervisor::readExposureGain(const std::string& serial, double& e
 }
 
 void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {
-    if (p.w <= 0 || p.h <= 0) return;   // full frame
-    auto* c = dev.raw(); if (!c) return;
-    // Option A (default): do NOT crop the sensor. Capture the full "crude" frame so it can
-    // be sent whole (full_image + the crud_image used for drawing the ROI polygon), and let
-    // detection crop to the ROI in software (RoiCropRecognizer), exactly like the IP cameras.
-    // Set basler_sensor_aoi=1 to restore the hardware AOI (smaller frames / less GigE
-    // bandwidth, but then no full-scene image is available).
-    const bool hwAoi = SettingsManager::instance().getLpr<int>("basler_sensor_aoi").value_or(0) != 0;
-    if (!hwAoi) {
-        LOGI() << "[supervisor][roi][" << dev.serial()
-               << "] full-frame mode (no sensor AOI); ROI applied in software for detection";
+    // Hardware sensor AOI crop from the NORMALIZED rect in the profile (set per role in
+    // buildProfile: mono plate cam always, colour cam only when enabled). Shrinking the
+    // transmitted frame is a REAL GigE bandwidth cut (fewer bytes/frame) — unlike the
+    // software ROI, which still captures + sends the whole sensor. cropWn/Hn<=0 => full frame.
+    if (p.cropWn <= 0.0 || p.cropHn <= 0.0) {
+        LOGI() << "[supervisor][aoi][" << dev.serial()
+               << "] full-frame (no hardware AOI); detection still crops to the ROI in software";
         return;
     }
+    auto* c = dev.raw(); if (!c) return;
     try {
-        // Round DOWN to the nearest valid increment at/above the node minimum. For an
-        // input below min (e.g. offset 0 with min 16) integer truncation would yield a
-        // value < min and SetValue would throw — so clamp the result up to min.
-        auto align = [](int v, int mn, int inc) {
-            const int a = inc > 0 ? mn + ((v - mn) / inc) * inc : v;
+        // Round DOWN to the nearest valid increment at/above the node minimum (a value
+        // below min would make SetValue throw), returned as int64.
+        auto align = [](int64_t v, int64_t mn, int64_t inc) -> int64_t {
+            const int64_t a = inc > 0 ? mn + ((v - mn) / inc) * inc : v;
             return a < mn ? mn : a;
         };
-        if (c->Width.IsWritable())
-            c->Width.SetValue(align(p.w, (int)c->Width.GetMin(), (int)c->Width.GetInc()));
-        if (c->Height.IsWritable())
-            c->Height.SetValue(align(p.h, (int)c->Height.GetMin(), (int)c->Height.GetInc()));
-        if (c->OffsetX.IsWritable())
-            c->OffsetX.SetValue(align(p.x, (int)c->OffsetX.GetMin(), (int)c->OffsetX.GetInc()));
-        if (c->OffsetY.IsWritable())
-            c->OffsetY.SetValue(align(p.y, (int)c->OffsetY.GetMin(), (int)c->OffsetY.GetInc()));
+        // Zero the offsets FIRST so Width/Height can reach the full sensor max; then read
+        // the sensor size, set the (smaller) Width/Height, then position the offsets. This
+        // is the order Basler requires — a new Width with an old non-zero offset can exceed
+        // the max and throw.
+        if (c->OffsetX.IsWritable()) c->OffsetX.SetValue(c->OffsetX.GetMin());
+        if (c->OffsetY.IsWritable()) c->OffsetY.SetValue(c->OffsetY.GetMin());
+        const int64_t sensorW = c->Width.IsReadable()  ? c->Width.GetMax()  : 0;
+        const int64_t sensorH = c->Height.IsReadable() ? c->Height.GetMax() : 0;
+        if (sensorW <= 0 || sensorH <= 0) { LOGW() << "[supervisor][aoi][" << dev.serial() << "] sensor size unknown -> skip"; return; }
+
+        int64_t w = align((int64_t)std::llround(p.cropWn * sensorW), c->Width.GetMin(),  c->Width.GetInc());
+        int64_t h = align((int64_t)std::llround(p.cropHn * sensorH), c->Height.GetMin(), c->Height.GetInc());
+        w = std::clamp<int64_t>(w, c->Width.GetMin(),  sensorW);
+        h = std::clamp<int64_t>(h, c->Height.GetMin(), sensorH);
+        if (c->Width.IsWritable())  c->Width.SetValue(w);
+        if (c->Height.IsWritable()) c->Height.SetValue(h);
+
+        int64_t x = align((int64_t)std::llround(p.cropXn * sensorW), c->OffsetX.GetMin(), c->OffsetX.GetInc());
+        int64_t y = align((int64_t)std::llround(p.cropYn * sensorH), c->OffsetY.GetMin(), c->OffsetY.GetInc());
+        x = std::clamp<int64_t>(x, c->OffsetX.GetMin(), sensorW - w);   // keep offset+size within the sensor
+        y = std::clamp<int64_t>(y, c->OffsetY.GetMin(), sensorH - h);
+        if (c->OffsetX.IsWritable()) c->OffsetX.SetValue(x);
+        if (c->OffsetY.IsWritable()) c->OffsetY.SetValue(y);
+
+        LOGI() << "[supervisor][aoi][" << dev.serial() << "] hardware AOI " << w << "x" << h
+               << " @ (" << x << "," << y << ") from norm(" << p.cropXn << "," << p.cropYn
+               << "," << p.cropWn << "," << p.cropHn << ") sensor=" << sensorW << "x" << sensorH;
     }
     catch (const Pylon::GenericException& e) {
-        AppLogger::LogPylonException(e.GetDescription(), "[supervisor] roi -- " + dev.serial());
+        AppLogger::LogPylonException(e.GetDescription(), "[supervisor] aoi -- " + dev.serial());
     }
     catch (const std::exception& e) {
-        AppLogger::LogException(e, "[supervisor] roi -- " + dev.serial());
+        AppLogger::LogException(e, "[supervisor] aoi -- " + dev.serial());
     }
     catch (...) {
-        AppLogger::LogUnknownException("[supervisor] roi -- " + dev.serial());
+        AppLogger::LogUnknownException("[supervisor] aoi -- " + dev.serial());
     }
 }
 

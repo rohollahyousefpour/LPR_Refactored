@@ -60,6 +60,15 @@ private:
     ConnectionSupervisor::Profile buildProfile(const std::string& serial,
                                                bool mono, bool master);
 
+    // Fill p.cropXn/Yn/Wn/Hn (normalized hardware-AOI crop) for a role: the mono plate
+    // camera of a pair is always cropped (ROI-polygon bbox, or a manual rect); the colour
+    // camera crops only when rgb_crop_enable is on. No crop => leaves them 0 (full frame).
+    void computeAoiCrop(ConnectionSupervisor::Profile& p, bool mono) const;
+
+    // Test seam: the AOI emulation test drives computeAoiCrop() directly (reads the
+    // per-camera crop settings without standing up the whole capture pipeline).
+    friend struct BaslerAoiTestAccess;
+
     CameraContext ctx_;
 
     std::unique_ptr<ConnectionSupervisor> supervisor_;

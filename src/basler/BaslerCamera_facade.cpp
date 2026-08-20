@@ -149,6 +149,18 @@ std::string BaslerCamera::hwSnapshot() const {
     // LPR-level, re-read by ConnectionSupervisor::applyBandwidth() / the AOI gate at connect.
     li("basler_sensor_aoi"); li("gige_packet_size"); li("gige_link_mbytes_per_sec");
     li("gige_scpd_floor"); li("gige_fps_safety_pct"); li("gige_frame_rate_cap"); li("gige_bw_reserve_pct");
+    // Per-camera hardware AOI crop (re-read by computeAoiCrop() at connect). Changing any
+    // of these -- or the ROI polygon that roi-mode crops to -- must re-crop, so include the
+    // keys AND the polygon bounding box so reapplySettings() reconnects the camera.
+    cs("mono_crop_mode"); cf("mono_crop_x"); cf("mono_crop_y"); cf("mono_crop_w"); cf("mono_crop_h");
+    ci("rgb_crop_enable"); cs("rgb_crop_mode"); cf("rgb_crop_x"); cf("rgb_crop_y"); cf("rgb_crop_w"); cf("rgb_crop_h");
+    {
+        const auto pts = s.getCameraPoints(id);   // normalized; bbox feeds roi-mode crop
+        float mnx = 2, mny = 2, mxx = -1, mxy = -1;
+        for (const auto& pt : pts) { mnx = std::min(mnx, pt.x); mxx = std::max(mxx, pt.x);
+                                     mny = std::min(mny, pt.y); mxy = std::max(mxy, pt.y); }
+        o << "roi_bbox=" << mnx << ',' << mny << ',' << mxx << ',' << mxy << ';';
+    }
     return o.str();
 }
 
@@ -192,6 +204,60 @@ void BaslerCamera::reapplySettings() {
     catch (...) { AppLogger::LogUnknownException("BaslerCamera::reapplySettings"); }
 }
 
+void BaslerCamera::computeAoiCrop(ConnectionSupervisor::Profile& p, bool mono) const {
+    p.cropXn = p.cropYn = p.cropWn = p.cropHn = 0.0;   // default: full frame
+    SettingsManager& s = SettingsManager::instance();
+
+    bool want = false; std::string mode;
+    if (mono) {
+        // Mono plate camera of a pair: ALWAYS cropped (the plate region is all that matters,
+        // so cropping the sensor is a guaranteed bandwidth cut).
+        want = true;
+        mode = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "mono_crop_mode").value_or("roi");
+    } else {
+        // Colour camera: optional (single colour cam OR the colour of a pair).
+        if (s.getCameraSettingByIdAndKey<int>(cameraId_, "rgb_crop_enable").value_or(0) != 0) {
+            want = true;
+            mode = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "rgb_crop_mode").value_or("manual");
+        }
+    }
+    if (!want) return;
+
+    double x = 0, y = 0, w = 0, h = 0;
+    if (mode == "roi") {
+        // Bounding box of the normalized ROI polygon (the plate-reading region).
+        const auto pts = s.getCameraPoints(cameraId_);   // cv::Point2f, normalized 0..1
+        if (pts.size() >= 3) {
+            float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+            for (const auto& pt : pts) {
+                minx = std::min(minx, pt.x); maxx = std::max(maxx, pt.x);
+                miny = std::min(miny, pt.y); maxy = std::max(maxy, pt.y);
+            }
+            x = minx; y = miny; w = maxx - minx; h = maxy - miny;
+        }
+    } else {   // "manual" — a normalized rect the operator drew on the snapshot
+        const char* kx = mono ? "mono_crop_x" : "rgb_crop_x";
+        const char* ky = mono ? "mono_crop_y" : "rgb_crop_y";
+        const char* kw = mono ? "mono_crop_w" : "rgb_crop_w";
+        const char* kh = mono ? "mono_crop_h" : "rgb_crop_h";
+        x = s.getCameraSettingByIdAndKey<float>(cameraId_, kx).value_or(0.0f);
+        y = s.getCameraSettingByIdAndKey<float>(cameraId_, ky).value_or(0.0f);
+        w = s.getCameraSettingByIdAndKey<float>(cameraId_, kw).value_or(0.0f);
+        h = s.getCameraSettingByIdAndKey<float>(cameraId_, kh).value_or(0.0f);
+    }
+
+    // Clamp into the unit square; drop a degenerate rect (=> full frame).
+    x = std::clamp(x, 0.0, 1.0);
+    y = std::clamp(y, 0.0, 1.0);
+    if (w <= 0.0 || h <= 0.0) return;
+    w = std::min(w, 1.0 - x);
+    h = std::min(h, 1.0 - y);
+    if (w <= 0.001 || h <= 0.001) return;
+    p.cropXn = x; p.cropYn = y; p.cropWn = w; p.cropHn = h;
+    LOGI() << "[BaslerCamera][aoi] cam=" << cameraId_ << (mono ? " mono" : " rgb")
+           << " mode=" << mode << " crop norm(" << x << "," << y << "," << w << "," << h << ")";
+}
+
 ConnectionSupervisor::Profile
 BaslerCamera::buildProfile(const std::string& serial, bool mono, bool /*master*/) {
     ConnectionSupervisor::Profile p;
@@ -207,7 +273,7 @@ BaslerCamera::buildProfile(const std::string& serial, bool mono, bool /*master*/
         p.triggerOn        = false;
         p.cameraNativeAuto = true;
         p.pfsFile          = mono ? monoPfs_ : rgbPfs_;
-        p.x = x_; p.y = y_; p.w = w_; p.h = h_;
+        computeAoiCrop(p, mono);   // hardware AOI crop (mono always / colour if enabled)
 
         AutoExposureStrategy::Limits lim;
         lim.maxExposureUs = maxExposure_;   // motion-blur cap (settings)
@@ -231,7 +297,7 @@ BaslerCamera::buildProfile(const std::string& serial, bool mono, bool /*master*/
         p.triggerOn = (hasMono_ || triggerOn_ == 1); // pair RGB OR single tm==1 => slave
     }
     p.pfsFile      = mono ? monoPfs_ : rgbPfs_;
-    p.x = x_; p.y = y_; p.w = w_; p.h = h_;
+    computeAoiCrop(p, mono);   // hardware AOI crop (mono always / colour if enabled)
 
     if (mono) {
         // Mono = PLATE camera under strobed IR (the master's ExposureActive pulse drives the IR).
