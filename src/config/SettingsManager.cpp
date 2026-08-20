@@ -379,6 +379,13 @@ std::optional<cv::Rect2f> SettingsManager::aoiCropNorm(int cameraId, bool mono) 
     // Mirrors BaslerCamera::computeAoiCrop: mono plate cam of a pair is ALWAYS cropped
     // (roi = ROI-polygon bbox, or a manual rect); the colour camera crops only when
     // rgb_crop_enable is on. Returns nullopt for "no crop / full frame".
+
+    // Configuration mode: temporarily disable the crop so the camera reconnects at FULL sensor
+    // and snapshots/crud show the whole scene (the operator draws ROI/crop on the full image).
+    // The frontend sets this while the ROI/AOI editor is open and clears it on close.
+    if (getCameraSettingByIdAndKey<int>(cameraId, "aoi_config_mode").value_or(0) != 0)
+        return std::nullopt;
+
     bool want = false; std::string mode;
     if (mono) {
         want = true;
@@ -416,6 +423,22 @@ std::optional<cv::Rect2f> SettingsManager::aoiCropNorm(int cameraId, bool mono) 
     w = std::min(w, 1.0 - x);
     h = std::min(h, 1.0 - y);
     if (w <= 0.001 || h <= 0.001) return std::nullopt;
+
+    // Safety margin: grow the crop around its centre by aoi_crop_margin percent so small camera
+    // drift is tolerated (the plate region stays inside the transmitted frame instead of being
+    // clipped away). Bigger margin = more drift tolerance, slightly less bandwidth saving.
+    const int marginPct = getCameraSettingByIdAndKey<int>(cameraId, "aoi_crop_margin").value_or(0);
+    if (marginPct > 0) {
+        const double mp = std::clamp(marginPct, 0, 200) / 100.0;
+        x = x - w * mp * 0.5;
+        y = y - h * mp * 0.5;
+        w = w * (1.0 + mp);
+        h = h * (1.0 + mp);
+        x = std::clamp(x, 0.0, 1.0);
+        y = std::clamp(y, 0.0, 1.0);
+        w = std::min(w, 1.0 - x);
+        h = std::min(h, 1.0 - y);
+    }
     return cv::Rect2f((float)x, (float)y, (float)w, (float)h);
 }
 

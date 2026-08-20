@@ -167,6 +167,40 @@ int main(){
             CHECK(dc.has_value(), "detectionCropNorm reports a crop for the pylon pair -> software ROI/mask skipped");
             if (dc) CHECK(near0(dc->x,0.20)&&near0(dc->y,0.35)&&near0(dc->width,0.60)&&near0(dc->height,0.30),
                           "detectionCropNorm == mono ROI bbox (same rect the sensor was cropped to)");
+
+            // ---- Hybrid #1: safety margin grows the crop (drift tolerance) ----
+            std::printf("\n== safety margin (aoi_crop_margin=20%%) ==\n");
+            {
+                json sm = settings; sm.push_back(json{{"name","aoi_crop_margin"},{"value",20}});
+                json b = {{"settings",json::array()},{"cameras_data",json::array({ json{{"camera_id",CID},{"settings",sm},{"points",points}} })}};
+                lpr::SettingsManager::instance().loadAll(b);
+                auto rc = lpr::SettingsManager::instance().aoiCropNorm(CID, false);   // colour manual (0.3,0.45,0.4,0.12)
+                CHECK(rc.has_value(), "colour crop still present with margin");
+                if (rc) CHECK(near0(rc->x,0.26)&&near0(rc->y,0.438)&&near0(rc->width,0.48)&&near0(rc->height,0.144),
+                              "20%% margin: 0.40->0.48 w, 0.12->0.144 h, centred (x 0.30->0.26)");
+                ConnectionSupervisor::Profile pmar; BaslerAoiTestAccess::compute(cam, pmar, /*mono*/false);
+                Applied am2 = applyToEmu(colorSerial, pmar);
+                int64_t eW,eH,eX,eY; expectAoi(caps,0.26,0.438,0.48,0.144,eW,eH,eX,eY);
+                CHECK(am2.W==eW && am2.H==eH, "hardware AOI grew with the margin (wider than the un-margined 1638)");
+                std::printf("  colour hardware WITH margin: %lldx%lld @ (%lld,%lld)\n",
+                            (long long)am2.W,(long long)am2.H,(long long)am2.X,(long long)am2.Y);
+            }
+
+            // ---- Hybrid #2: config mode un-crops for setup (full sensor) ----
+            std::printf("\n== config mode (aoi_config_mode=1 -> full sensor) ==\n");
+            {
+                json sc = settings; sc.push_back(json{{"name","aoi_config_mode"},{"value",1}});
+                json b = {{"settings",json::array()},{"cameras_data",json::array({ json{{"camera_id",CID},{"settings",sc},{"points",points}} })}};
+                lpr::SettingsManager::instance().loadAll(b);
+                CHECK(!lpr::SettingsManager::instance().detectionCropNorm(CID).has_value(), "config mode -> detectionCropNorm nullopt (software ROI restored)");
+                CHECK(!lpr::SettingsManager::instance().aoiCropNorm(CID, true).has_value(), "config mode -> mono full frame too");
+                ConnectionSupervisor::Profile pc; BaslerAoiTestAccess::compute(cam, pc, /*mono*/true);
+                CHECK(pc.cropWn==0.0 && pc.cropHn==0.0, "computeAoiCrop -> full frame under config mode");
+                Applied ac2 = applyToEmu(monoSerial, pc);
+                CHECK(ac2.W==caps.defW && ac2.H==caps.defH, "hardware stays FULL sensor under config mode (snapshot shows whole scene)");
+                std::printf("  mono hardware UNDER config mode: %lldx%lld (power-on/full, no crop)\n",
+                            (long long)ac2.W,(long long)ac2.H);
+            }
         }
 
         // Negative: a NON-pylon camera never reports a hardware crop, so the software ROI stays on.

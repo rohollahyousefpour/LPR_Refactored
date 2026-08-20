@@ -154,6 +154,9 @@ std::string BaslerCamera::hwSnapshot() const {
     // keys AND the polygon bounding box so reapplySettings() reconnects the camera.
     cs("mono_crop_mode"); cf("mono_crop_x"); cf("mono_crop_y"); cf("mono_crop_w"); cf("mono_crop_h");
     ci("rgb_crop_enable"); cs("rgb_crop_mode"); cf("rgb_crop_x"); cf("rgb_crop_y"); cf("rgb_crop_w"); cf("rgb_crop_h");
+    // Config-mode (temporarily un-crop for setup) + safety margin: both change the applied crop,
+    // so reconnect when they change (config-mode toggling is exactly how the full-sensor snapshot works).
+    ci("aoi_config_mode"); ci("aoi_crop_margin");
     {
         const auto pts = s.getCameraPoints(id);   // normalized; bbox feeds roi-mode crop
         float mnx = 2, mny = 2, mxx = -1, mxy = -1;
