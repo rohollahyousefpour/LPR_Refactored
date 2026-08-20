@@ -20,3 +20,8 @@ if(TARGET lpr_basler)
   add_test(NAME aoi_pair_emulated COMMAND test_aoi_pair_emulated)
   set_tests_properties(aoi_pair_emulated PROPERTIES ENVIRONMENT "PYLON_CAMEMU=2")
 endif()
+
+if(TARGET lpr_basler)
+  add_executable(emu_grab emu_grab.cpp)
+  target_link_libraries(emu_grab PRIVATE lpr_basler)
+endif()
