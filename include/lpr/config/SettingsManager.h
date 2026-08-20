@@ -46,6 +46,15 @@ public:
     template<typename T>
     std::optional<T> getCameraSettingByIdAndKey(int cameraId, const std::string& key) const;
 
+    // Normalized (0..1) hardware-AOI crop for a camera ROLE (mono plate cam vs colour cam),
+    // computed exactly like BaslerCamera::computeAoiCrop reads it. nullopt => no crop (full frame).
+    std::optional<cv::Rect2f> aoiCropNorm(int cameraId, bool mono) const;
+    // The crop the DETECTION frame actually receives: the mono of a pylon pair (always cropped),
+    // or a single pylon colour camera when rgb_crop_enable is on. Lets the software ROI/mask be
+    // crop-aware so it is NOT applied a second time on the already-cropped sensor frame (that
+    // double-crop shrank the region and cut plates in half). nullopt => no hardware crop.
+    std::optional<cv::Rect2f> detectionCropNorm(int cameraId) const;
+
 private:
     SettingsManager() = default;
     int num_cam = 0;

@@ -206,56 +206,13 @@ void BaslerCamera::reapplySettings() {
 
 void BaslerCamera::computeAoiCrop(ConnectionSupervisor::Profile& p, bool mono) const {
     p.cropXn = p.cropYn = p.cropWn = p.cropHn = 0.0;   // default: full frame
-    SettingsManager& s = SettingsManager::instance();
-
-    bool want = false; std::string mode;
-    if (mono) {
-        // Mono plate camera of a pair: ALWAYS cropped (the plate region is all that matters,
-        // so cropping the sensor is a guaranteed bandwidth cut).
-        want = true;
-        mode = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "mono_crop_mode").value_or("roi");
-    } else {
-        // Colour camera: optional (single colour cam OR the colour of a pair).
-        if (s.getCameraSettingByIdAndKey<int>(cameraId_, "rgb_crop_enable").value_or(0) != 0) {
-            want = true;
-            mode = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "rgb_crop_mode").value_or("manual");
-        }
+    // The crop math lives in SettingsManager::aoiCropNorm, shared with detectionCropNorm so the
+    // detection ROI/mask is crop-aware and not re-applied on the already-cropped sensor frame.
+    if (auto r = SettingsManager::instance().aoiCropNorm(cameraId_, mono)) {
+        p.cropXn = r->x; p.cropYn = r->y; p.cropWn = r->width; p.cropHn = r->height;
+        LOGI() << "[BaslerCamera][aoi] cam=" << cameraId_ << (mono ? " mono" : " rgb")
+               << " crop norm(" << r->x << "," << r->y << "," << r->width << "," << r->height << ")";
     }
-    if (!want) return;
-
-    double x = 0, y = 0, w = 0, h = 0;
-    if (mode == "roi") {
-        // Bounding box of the normalized ROI polygon (the plate-reading region).
-        const auto pts = s.getCameraPoints(cameraId_);   // cv::Point2f, normalized 0..1
-        if (pts.size() >= 3) {
-            float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
-            for (const auto& pt : pts) {
-                minx = std::min(minx, pt.x); maxx = std::max(maxx, pt.x);
-                miny = std::min(miny, pt.y); maxy = std::max(maxy, pt.y);
-            }
-            x = minx; y = miny; w = maxx - minx; h = maxy - miny;
-        }
-    } else {   // "manual" — a normalized rect the operator drew on the snapshot
-        const char* kx = mono ? "mono_crop_x" : "rgb_crop_x";
-        const char* ky = mono ? "mono_crop_y" : "rgb_crop_y";
-        const char* kw = mono ? "mono_crop_w" : "rgb_crop_w";
-        const char* kh = mono ? "mono_crop_h" : "rgb_crop_h";
-        x = s.getCameraSettingByIdAndKey<float>(cameraId_, kx).value_or(0.0f);
-        y = s.getCameraSettingByIdAndKey<float>(cameraId_, ky).value_or(0.0f);
-        w = s.getCameraSettingByIdAndKey<float>(cameraId_, kw).value_or(0.0f);
-        h = s.getCameraSettingByIdAndKey<float>(cameraId_, kh).value_or(0.0f);
-    }
-
-    // Clamp into the unit square; drop a degenerate rect (=> full frame).
-    x = std::clamp(x, 0.0, 1.0);
-    y = std::clamp(y, 0.0, 1.0);
-    if (w <= 0.0 || h <= 0.0) return;
-    w = std::min(w, 1.0 - x);
-    h = std::min(h, 1.0 - y);
-    if (w <= 0.001 || h <= 0.001) return;
-    p.cropXn = x; p.cropYn = y; p.cropWn = w; p.cropHn = h;
-    LOGI() << "[BaslerCamera][aoi] cam=" << cameraId_ << (mono ? " mono" : " rgb")
-           << " mode=" << mode << " crop norm(" << x << "," << y << "," << w << "," << h << ")";
 }
 
 ConnectionSupervisor::Profile

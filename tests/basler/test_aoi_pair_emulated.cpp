@@ -102,6 +102,9 @@ int main(){
         // ROI polygon (used by the mono roi-mode auto crop) -> bbox (0.20,0.35,0.60,0.30).
         // Colour manual rect (rgb_crop_*) -> (0.30,0.45,0.40,0.12).
         json settings = json::array({
+            json{{"name","type_of_link"},{"value","pylon"}},
+            json{{"name","CameraAddress"},{"value",colorSerial}},
+            json{{"name","MonoCameraAddress"},{"value",monoSerial}},
             json{{"name","mono_crop_mode"},{"value","roi"}},
             json{{"name","rgb_crop_enable"},{"value",1}},
             json{{"name","rgb_crop_mode"}, {"value","manual"}},
@@ -154,6 +157,27 @@ int main(){
             CHECK(cropPair < fullPair, "pair's combined frame bytes < two full sensors (real bandwidth cut)");
             std::printf("\n  PAIR bandwidth: %.0f -> %.0f B/frame (%.1f%% of two full sensors)\n",
                         fullPair, cropPair, 100.0*cropPair/fullPair);
+
+            // The software-ROI guard: detection runs on the MONO, which is hardware-cropped, so
+            // detectionCropNorm must report that crop -> the pipeline skips the software ROI/mask
+            // (otherwise the full-sensor-normalized polygon re-applied on the cropped frame would
+            // shrink it and cut plates in half).
+            std::printf("\n== software-ROI guard (detectionCropNorm) ==\n");
+            auto dc = lpr::SettingsManager::instance().detectionCropNorm(CID);
+            CHECK(dc.has_value(), "detectionCropNorm reports a crop for the pylon pair -> software ROI/mask skipped");
+            if (dc) CHECK(near0(dc->x,0.20)&&near0(dc->y,0.35)&&near0(dc->width,0.60)&&near0(dc->height,0.30),
+                          "detectionCropNorm == mono ROI bbox (same rect the sensor was cropped to)");
+        }
+
+        // Negative: a NON-pylon camera never reports a hardware crop, so the software ROI stays on.
+        {
+            json b2 = {{"settings",json::array()},{"cameras_data",json::array({
+                json{{"camera_id",9},
+                     {"settings",json::array({ json{{"name","type_of_link"},{"value","rtsp"}} })},
+                     {"points",json::array({ json::array({0.2,0.2}), json::array({0.8,0.2}), json::array({0.8,0.8}) })}} })}};
+            lpr::SettingsManager::instance().loadAll(b2);
+            CHECK(!lpr::SettingsManager::instance().detectionCropNorm(9).has_value(),
+                  "non-pylon camera -> no hardware crop -> software ROI kept (unchanged behaviour)");
         }
     }
     catch(const Pylon::GenericException& e){ std::printf("[FAIL] pylon: %s\n",e.GetDescription()); rc=2; ++g_fail; }

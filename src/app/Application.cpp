@@ -434,14 +434,29 @@ std::unique_ptr<IPlateRecognizer> Application::buildRecognizerChain() {
     }
 
     // Outermost: per-camera detection ROI + polygon mask (from settings).
+    //
+    // IMPORTANT — hardware-AOI interaction: when a camera is hardware-cropped, the frame that
+    // reaches detection is ALREADY the plate region (the Basler sensor was cropped to the ROI
+    // bbox / manual rect). Re-applying the software ROI/mask here would map the full-sensor-
+    // normalized polygon onto the smaller cropped frame, shrinking it to a central sub-region
+    // and cutting plates in half. So for a hardware-cropped camera we skip the software ROI/mask
+    // entirely and detect on the whole cropped frame ("don't mask the cropped region").
     roiRec_ = std::make_unique<RoiCropRecognizer>(
         *base,
         [](const std::string& gate, int w, int h) {
-            try { return SettingsManager::instance().getGeneralRoi(std::stoi(gate), w, h); }
+            try {
+                const int id = std::stoi(gate);
+                if (SettingsManager::instance().detectionCropNorm(id)) return cv::Rect();  // hardware-cropped -> no software ROI
+                return SettingsManager::instance().getGeneralRoi(id, w, h);
+            }
             catch (...) { return cv::Rect(); }
         },
         [](const std::string& gate, int w, int h) {
-            try { return SettingsManager::instance().getCameraPoints(std::stoi(gate), w, h); }
+            try {
+                const int id = std::stoi(gate);
+                if (SettingsManager::instance().detectionCropNorm(id)) return std::vector<cv::Point>{};  // hardware-cropped -> no mask
+                return SettingsManager::instance().getCameraPoints(id, w, h);
+            }
             catch (...) { return std::vector<cv::Point>{}; }
         });
 

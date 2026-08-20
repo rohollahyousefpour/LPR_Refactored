@@ -4,6 +4,7 @@
 
 #include "lpr/config/JsonAbi.h"      // FIRST: pin json ABI macros before json.hpp is pulled in
 #include "lpr/config/SettingsManager.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <sstream>            // probe
@@ -372,6 +373,60 @@ SettingsManager::getCameraSettings(int cameraId) const {
         return std::cref(it->second);
     }
     return std::nullopt;
+}
+
+std::optional<cv::Rect2f> SettingsManager::aoiCropNorm(int cameraId, bool mono) const {
+    // Mirrors BaslerCamera::computeAoiCrop: mono plate cam of a pair is ALWAYS cropped
+    // (roi = ROI-polygon bbox, or a manual rect); the colour camera crops only when
+    // rgb_crop_enable is on. Returns nullopt for "no crop / full frame".
+    bool want = false; std::string mode;
+    if (mono) {
+        want = true;
+        mode = getCameraSettingByIdAndKey<std::string>(cameraId, "mono_crop_mode").value_or("roi");
+    } else if (getCameraSettingByIdAndKey<int>(cameraId, "rgb_crop_enable").value_or(0) != 0) {
+        want = true;
+        mode = getCameraSettingByIdAndKey<std::string>(cameraId, "rgb_crop_mode").value_or("manual");
+    }
+    if (!want) return std::nullopt;
+
+    double x = 0, y = 0, w = 0, h = 0;
+    if (mode == "roi") {
+        const auto pts = getCameraPoints(cameraId);          // normalized ROI polygon
+        if (pts.size() >= 3) {
+            float minx = 1e9f, miny = 1e9f, maxx = -1e9f, maxy = -1e9f;
+            for (const auto& p : pts) {
+                minx = std::min(minx, p.x); maxx = std::max(maxx, p.x);
+                miny = std::min(miny, p.y); maxy = std::max(maxy, p.y);
+            }
+            x = minx; y = miny; w = maxx - minx; h = maxy - miny;
+        }
+    } else {   // "manual"
+        const char* kx = mono ? "mono_crop_x" : "rgb_crop_x";
+        const char* ky = mono ? "mono_crop_y" : "rgb_crop_y";
+        const char* kw = mono ? "mono_crop_w" : "rgb_crop_w";
+        const char* kh = mono ? "mono_crop_h" : "rgb_crop_h";
+        x = getCameraSettingByIdAndKey<float>(cameraId, kx).value_or(0.0f);
+        y = getCameraSettingByIdAndKey<float>(cameraId, ky).value_or(0.0f);
+        w = getCameraSettingByIdAndKey<float>(cameraId, kw).value_or(0.0f);
+        h = getCameraSettingByIdAndKey<float>(cameraId, kh).value_or(0.0f);
+    }
+    x = std::clamp(x, 0.0, 1.0);
+    y = std::clamp(y, 0.0, 1.0);
+    if (w <= 0.0 || h <= 0.0) return std::nullopt;
+    w = std::min(w, 1.0 - x);
+    h = std::min(h, 1.0 - y);
+    if (w <= 0.001 || h <= 0.001) return std::nullopt;
+    return cv::Rect2f((float)x, (float)y, (float)w, (float)h);
+}
+
+std::optional<cv::Rect2f> SettingsManager::detectionCropNorm(int cameraId) const {
+    // Only pylon cameras get a hardware AOI crop.
+    if (getCameraSettingByIdAndKey<std::string>(cameraId, "type_of_link").value_or("") != "pylon")
+        return std::nullopt;
+    const std::string mono = getCameraSettingByIdAndKey<std::string>(cameraId, "MonoCameraAddress").value_or("");
+    const bool hasMono = !mono.empty() && mono != "-1";
+    // Detection runs on the mono of a pair; on the lone camera otherwise.
+    return aoiCropNorm(cameraId, hasMono);
 }
 
 cv::Rect SettingsManager::getGeneralRoi(int cameraId, int width, int height) const {
