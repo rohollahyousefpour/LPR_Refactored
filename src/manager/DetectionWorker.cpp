@@ -418,6 +418,17 @@ void DetectionWorker::process(FrameItem& item) {
         out.plate.passId = passIdFor(item.gate, out.plate.text, nowMs);   // manages passes_[gate]
         const int phys = cfg_.directionEnable ? physicalDirection(item.gate, out.plate.text) : 0;
         PassState& st = passes_[item.gate];   // SAME gate-keyed pass state passIdFor maintains
+        // Two vehicles interleaving at the gate: if a DIFFERENT vehicle's early announce is still
+        // held (pendingEarly), it MUST be flushed before this one is stashed — otherwise the
+        // announce-hold stash below (`st.pendingItem = out`) overwrites and silently loses it, so
+        // that car is read but never recorded. Record it as «unknown» (its direction never
+        // settled), mirroring the same guard on the de-dup path above.
+        if (st.pendingEarly && !st.pendingItem.plate.text.empty() && !out.plate.text.empty() &&
+            jaroWinklerDistance(st.pendingItem.plate.text, out.plate.text) < cfg_.passPlateSimilarity) {
+            st.pendingItem.plate.direction = 0;   // never settled -> unknown, but still recorded
+            st.pendingEarly = false;
+            emitPlate(std::move(st.pendingItem));
+        }
         if (!st.emittedEarly) {
             // Announce-hold: wait for the direction to SETTLE before the first announce, so
             // the first stored row already carries entry/exit instead of «unknown». Bounded
