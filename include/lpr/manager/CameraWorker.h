@@ -127,6 +127,10 @@ private:
     bool       connected_  = false;
     bool       firstFrame_ = true;        // detection (mono) reference — for the ROI/zone editor
     bool       firstColorFrame_ = true;   // colour evidence reference — for the colour-crop editor
+    // Frame size at the last crud send. A size change (e.g. a live AOI/crop change from manual
+    // control shrinks/grows the frame) re-arms the crud so the ROI editor shows the CURRENT crop.
+    cv::Size   lastCrudSize_{0, 0};
+    cv::Size   lastColorCrudSize_{0, 0};
 };
 
 } // namespace lpr

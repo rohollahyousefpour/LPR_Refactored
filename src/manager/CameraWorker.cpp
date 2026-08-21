@@ -172,6 +172,11 @@ void CameraWorker::onFrame(const cv::Mat& frame, const cv::Mat& mono, long times
     // co-located / rectified mono+RGB pair). If a deployment's color and mono differ a lot in
     // framing, the boxes on the live view may be offset (detection itself is unaffected).
     const cv::Mat& liveImg = haveSeparateEvidence ? evidenceImg : detectImg;
+    // Re-send the reference (crud) whenever the frame SIZE changes — e.g. after a live AOI/crop
+    // change from manual control resizes the frame — so the ROI/colour editors always show the
+    // CURRENT cropped image, not a stale first-frame capture.
+    if (!detectImg.empty() && detectImg.size() != lastCrudSize_) { firstFrame_ = true; lastCrudSize_ = detectImg.size(); }
+    if (haveSeparateEvidence && evidenceImg.size() != lastColorCrudSize_) { firstColorFrame_ = true; lastColorCrudSize_ = evidenceImg.size(); }
     // Reference images for the operator's editors, sent once each:
     //   * the DETECTION frame (mono for a pair) -> the ROI/zone reference (drawn where detection
     //     actually runs), fired as soon as the first frame arrives.
