@@ -82,6 +82,9 @@ public:
     // Read the exposure (us) + gain a sub-camera (by serial) actually holds now.
     bool readExposureGain(const std::string& serial, double& exposureUs, double& gain);
 
+    // Read the sub-camera's current hardware AOI + sensor ranges (manual-control AOI sliders).
+    bool readAoi(const std::string& serial, CaptureSource::Aoi& out);
+
     // Fetch the latest frame a sub-camera (by serial) grabbed, for the manual-control live view.
     bool latestFrame(const std::string& serial, cv::Mat& out);
 

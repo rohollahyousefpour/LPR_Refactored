@@ -32,6 +32,11 @@ bool CameraWorker::latestFrame(const std::string& serial, cv::Mat& out) {
     return source_ && source_->latestFrame(serial, out);
 }
 
+bool CameraWorker::readAoi(const std::string& serial, CaptureSource::Aoi& out) {
+    std::lock_guard<std::mutex> lk(sourceMtx_);
+    return source_ && source_->readAppliedAoi(serial, out);
+}
+
 void CameraWorker::start() {
     if (running_.exchange(true)) return;
     if (supervisor_.joinable()) supervisor_.join();   // join a previously self-stopped run

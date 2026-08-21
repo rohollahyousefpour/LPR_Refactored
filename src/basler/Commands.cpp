@@ -188,6 +188,53 @@ struct SetParameterCommand : ICommand {
     const char* name() const override { return "SetParameter"; }
 };
 
+// Set the hardware AOI (Width/Height/OffsetX/OffsetY) LIVE, like the Pylon Viewer. The AOI
+// nodes are acquisition-LOCKED while grabbing, so we stop the grab, apply in the Basler-required
+// order (zero the offsets first so Width/Height can reach the sensor max, set the sizes, then
+// position the offsets — each clamped + increment-aligned), and restart. Runs on the capture
+// thread (command drain), the same loop as retrieveBGR, so no grab is in flight here.
+struct SetAoiCommand : ICommand {
+    std::string serial; int64_t w, h, x, y;
+    SetAoiCommand(std::string s, int64_t w_, int64_t h_, int64_t x_, int64_t y_)
+        : serial(std::move(s)), w(w_), h(h_), x(x_), y(y_) {}
+    static int64_t align(int64_t v, int64_t mn, int64_t inc) {
+        const int64_t a = inc > 0 ? mn + ((v - mn) / inc) * inc : v; return a < mn ? mn : a;
+    }
+    void execute(const CameraResolver& resolve, IExposureController* /*ctrl*/) override {
+        auto* d = resolve(serial); if (!d || !d->raw()) return;
+        auto* c = d->raw();
+        const bool wasGrabbing = d->isGrabbing();
+        if (wasGrabbing) d->stopGrabbing();
+        try {
+            if (c->OffsetX.IsWritable()) c->OffsetX.SetValue(c->OffsetX.GetMin());
+            if (c->OffsetY.IsWritable()) c->OffsetY.SetValue(c->OffsetY.GetMin());
+            if (w > 0 && c->Width.IsWritable())
+                c->Width.SetValue(std::clamp(align(w, c->Width.GetMin(), c->Width.GetInc()),
+                                             c->Width.GetMin(), c->Width.GetMax()));
+            if (h > 0 && c->Height.IsWritable())
+                c->Height.SetValue(std::clamp(align(h, c->Height.GetMin(), c->Height.GetInc()),
+                                              c->Height.GetMin(), c->Height.GetMax()));
+            if (x >= 0 && c->OffsetX.IsWritable()) {
+                const int64_t maxx = c->Width.GetMax() - c->Width.GetValue();
+                c->OffsetX.SetValue(std::clamp(align(x, c->OffsetX.GetMin(), c->OffsetX.GetInc()),
+                                               c->OffsetX.GetMin(), maxx));
+            }
+            if (y >= 0 && c->OffsetY.IsWritable()) {
+                const int64_t maxy = c->Height.GetMax() - c->Height.GetValue();
+                c->OffsetY.SetValue(std::clamp(align(y, c->OffsetY.GetMin(), c->OffsetY.GetInc()),
+                                               c->OffsetY.GetMin(), maxy));
+            }
+            LOGI() << "[aoi][" << serial << "] set -> " << c->Width.GetValue() << "x" << c->Height.GetValue()
+                   << " @ (" << c->OffsetX.GetValue() << "," << c->OffsetY.GetValue() << ")";
+        }
+        catch (const Pylon::GenericException& e) {
+            LOGW() << "[aoi][" << serial << "] set failed: " << e.GetDescription();
+        }
+        if (wasGrabbing) d->startGrabbing();
+    }
+    const char* name() const override { return "SetAoi"; }
+};
+
 struct ApplySyncRoleCommand : ICommand {
     std::string serial; std::shared_ptr<ISyncConfigurator> cfg;
     ApplySyncRoleCommand(std::string s, std::shared_ptr<ISyncConfigurator> c)
@@ -233,6 +280,18 @@ std::unique_ptr<ICommand> makeCommand(const std::string& key, const json& v) {
     if (key == "Exposure Time") return std::make_unique<SetExposureCommand>(serial, v.at("value").get<double>(), parseUnit(v));
     if (key == "Gain")          return std::make_unique<SetGainCommand>(serial, v.at("value").get<double>(), parseUnit(v));
     if (key == "Trigger Mode")  return std::make_unique<SetTriggerModeCommand>(serial, jsonToBool(v.at("value")));
+
+    // Pylon-Viewer-style live hardware AOI: {key:"Set AOI", camera_serial, width, height, offset_x, offset_y}.
+    if (key == "Set AOI") {
+        auto gi = [&](const char* k) -> int64_t {
+            if (!v.contains(k)) return -1;
+            const auto& n = v.at(k);
+            if (n.is_number()) return static_cast<int64_t>(std::llround(n.get<double>()));
+            if (n.is_string()) { try { return std::stoll(n.get<std::string>()); } catch (...) {} }
+            return -1;
+        };
+        return std::make_unique<SetAoiCommand>(serial, gi("width"), gi("height"), gi("offset_x"), gi("offset_y"));
+    }
 
     // Return to the camera's configured (NATS-loaded) settings / auto control.
     if (key == "Use Settings" || key == "Reset")

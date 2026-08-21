@@ -20,6 +20,7 @@
 
 #include "CameraContext.h"
 #include "IExposureStrategy.h"
+#include "lpr/capture/CaptureSource.h"
 
 
 class ConnectionSupervisor : public IExposureController {
@@ -66,6 +67,10 @@ public:
     // Read the exposure (microseconds) + gain the named camera actually holds now,
     // so the manual-control UI can report ground truth. False if not connected.
     bool readExposureGain(const std::string& serial, double& exposureUs, double& gain);
+
+    // Read the current hardware AOI (Width/Height/Offset) + sensor ranges the named camera holds
+    // now, for the manual-control Pylon-Viewer-style AOI sliders. False if not connected.
+    bool readAoi(const std::string& serial, lpr::CaptureSource::Aoi& out);
 
     // Capture-thread entry: remove the faulted device, then start a reconnect
     // worker. Removal here (not in the worker) preserves the pointer-safety

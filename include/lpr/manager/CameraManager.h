@@ -65,6 +65,9 @@ public:
     // for the manual-control live view. False if the camera/serial is not available.
     bool latestFrame(const std::string& cameraId, const std::string& serial, cv::Mat& out);
 
+    // Read a sub-camera's current hardware AOI + sensor ranges (manual-control AOI sliders).
+    bool readAoi(const std::string& cameraId, const std::string& serial, CaptureSource::Aoi& out);
+
 private:
     std::vector<std::unique_ptr<CameraWorker>> workers_;
     CameraWorker::FrameSink rawObserver_;

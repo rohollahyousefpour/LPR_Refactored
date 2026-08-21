@@ -74,6 +74,14 @@ bool CameraManager::latestFrame(const std::string& cameraId, const std::string& 
     return false;
 }
 
+bool CameraManager::readAoi(const std::string& cameraId, const std::string& serial, CaptureSource::Aoi& out) {
+    for (auto& w : workers_) {
+        if (w && w->gate() == cameraId)
+            return w->readAoi(serial, out);
+    }
+    return false;
+}
+
 } // namespace lpr
 
 // --- settings-driven construction (bridge to the ported SettingsManager) ---

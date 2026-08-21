@@ -66,6 +66,10 @@ public:
         cv::Mat     image;           // that camera's frame
         double      exposureUs = -1; // current exposure (us); <0 => omit
         double      gain       = -1; // current gain;        <0 => omit
+        // Current hardware AOI + sensor ranges for the Pylon-Viewer-style Width/Height/Offset
+        // sliders. aoiWMax<=0 => AOI unavailable (omitted from the message).
+        long aoiW = 0, aoiH = 0, aoiX = 0, aoiY = 0;
+        long aoiWMax = 0, aoiHMax = 0, aoiWInc = 1, aoiHInc = 1, aoiXInc = 1, aoiYInc = 1;
     };
     // Manual-control live: ONE message ("live_manual_control") carrying every camera of a
     // gate (both sensors of a mono+RGB pair, or the single camera), each with its serial

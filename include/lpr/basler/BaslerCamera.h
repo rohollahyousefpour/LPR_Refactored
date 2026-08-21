@@ -40,6 +40,10 @@ public:
     // Report the true applied exposure/gain for a sub-camera (mono or RGB) by serial.
     bool readAppliedExposureGain(const std::string& serial, double& exposureUs, double& gain) override;
 
+    // Report the true current hardware AOI (Width/Height/Offset) + sensor ranges for a sub-camera
+    // by serial, for the manual-control Pylon-Viewer-style AOI sliders.
+    bool readAppliedAoi(const std::string& serial, Aoi& out) override;
+
     // Fetch the latest grabbed frame for a sub-camera by serial (for the manual-control live view).
     bool latestFrame(const std::string& serial, cv::Mat& out) override;
 

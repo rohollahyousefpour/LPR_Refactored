@@ -412,6 +412,10 @@ bool BaslerCamera::readAppliedExposureGain(const std::string& serial, double& ex
     return supervisor_ && supervisor_->readExposureGain(serial, exposureUs, gain);
 }
 
+bool BaslerCamera::readAppliedAoi(const std::string& serial, Aoi& out) {
+    return supervisor_ && supervisor_->readAoi(serial, out);
+}
+
 bool BaslerCamera::latestFrame(const std::string& serial, cv::Mat& out) {
     std::lock_guard<std::mutex> lk(ctx_.devMutex);
     auto it = ctx_.lastFrames.find(serial);

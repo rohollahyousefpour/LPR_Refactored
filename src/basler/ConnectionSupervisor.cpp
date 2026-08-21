@@ -368,6 +368,23 @@ bool ConnectionSupervisor::readExposureGain(const std::string& serial, double& e
     catch (...) { return false; }
 }
 
+bool ConnectionSupervisor::readAoi(const std::string& serial, lpr::CaptureSource::Aoi& out) {
+    std::lock_guard<std::mutex> lk(ctx_.devMutex);
+    auto it = ctx_.devices.find(serial);
+    if (it == ctx_.devices.end() || !it->second) return false;
+    auto* c = it->second->raw();
+    if (!c) return false;
+    try {
+        if (c->Width.IsReadable())   { out.width  = c->Width.GetValue();  out.widthMax  = c->Width.GetMax();  out.widthInc  = std::max<int64_t>(1, c->Width.GetInc()); }
+        if (c->Height.IsReadable())  { out.height = c->Height.GetValue(); out.heightMax = c->Height.GetMax(); out.heightInc = std::max<int64_t>(1, c->Height.GetInc()); }
+        if (c->OffsetX.IsReadable()) { out.offsetX = c->OffsetX.GetValue(); out.offsetXInc = std::max<int64_t>(1, c->OffsetX.GetInc()); }
+        if (c->OffsetY.IsReadable()) { out.offsetY = c->OffsetY.GetValue(); out.offsetYInc = std::max<int64_t>(1, c->OffsetY.GetInc()); }
+        return out.widthMax > 0 && out.heightMax > 0;
+    }
+    catch (const Pylon::GenericException&) { return false; }
+    catch (...) { return false; }
+}
+
 void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {
     // Hardware sensor AOI crop from the NORMALIZED rect in the profile (set per role in
     // buildProfile: mono plate cam always, colour cam only when enabled). Shrinking the

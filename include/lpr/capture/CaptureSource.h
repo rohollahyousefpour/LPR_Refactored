@@ -48,6 +48,16 @@ public:
     // independently (the paired frame bus loses per-serial identity). `out` is set only on true.
     virtual bool latestFrame(const std::string& /*serial*/, cv::Mat& /*out*/) { return false; }
 
+    // Current hardware AOI + sensor ranges for a sub-camera, so the manual-control UI can draw
+    // Pylon-Viewer-style Width/Height/OffsetX/OffsetY sliders with correct bounds and values.
+    struct Aoi {
+        long width = 0, height = 0, offsetX = 0, offsetY = 0;              // current, pixels
+        long widthMax = 0, heightMax = 0;                                 // sensor extents (max)
+        long widthInc = 1, heightInc = 1, offsetXInc = 1, offsetYInc = 1; // increments
+    };
+    // Read the AOI a sub-camera holds now, by serial. Default: unsupported (false); Basler overrides.
+    virtual bool readAppliedAoi(const std::string& /*serial*/, Aoi& /*out*/) { return false; }
+
 protected:
     void emitFrame(const cv::Mat& f, const cv::Mat& m, long t) { if (frameCb_) frameCb_(f, m, t); }
     void emitError() { if (errorCb_) errorCb_(); }

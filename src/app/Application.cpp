@@ -278,6 +278,15 @@ void Application::publishManualLive(const FrameItem& f) {
         if (it != manualLive_.end()) vals = it->second.vals;
     }
     auto fill = [&](MediaSender::ManualLiveCam& c) {
+        // Current hardware AOI (Width/Height/Offset) + sensor ranges for the manual-control
+        // Pylon-Viewer-style sliders — so the operator sees the true applied crop and its bounds.
+        CaptureSource::Aoi aoi;
+        if (cameras_ && cameras_->readAoi(f.gate, c.serial, aoi)) {
+            c.aoiW = aoi.width; c.aoiH = aoi.height; c.aoiX = aoi.offsetX; c.aoiY = aoi.offsetY;
+            c.aoiWMax = aoi.widthMax; c.aoiHMax = aoi.heightMax;
+            c.aoiWInc = aoi.widthInc; c.aoiHInc = aoi.heightInc;
+            c.aoiXInc = aoi.offsetXInc; c.aoiYInc = aoi.offsetYInc;
+        }
         // Prefer the exposure/gain the sensor ACTUALLY holds now (ground truth, post-clamp /
         // post-increment coercion) so the operator tunes against reality, not the request.
         double us = 0.0, g = 0.0;

@@ -53,6 +53,14 @@ std::string MediaSender::buildManualLiveMessage(const std::string& gate,
         };
         if (c.exposureUs >= 0) cam["exposure_us"] = c.exposureUs;
         if (c.gain       >= 0) cam["gain"]        = c.gain;
+        if (c.aoiWMax > 0) {
+            cam["aoi"] = {
+                {"width", c.aoiW}, {"height", c.aoiH}, {"offset_x", c.aoiX}, {"offset_y", c.aoiY},
+                {"width_max", c.aoiWMax}, {"height_max", c.aoiHMax},
+                {"width_inc", c.aoiWInc}, {"height_inc", c.aoiHInc},
+                {"offset_x_inc", c.aoiXInc}, {"offset_y_inc", c.aoiYInc}
+            };
+        }
         arr.push_back(std::move(cam));
     }
     json document = {
