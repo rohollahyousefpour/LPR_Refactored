@@ -281,11 +281,13 @@ std::unique_ptr<ICommand> makeCommand(const std::string& key, const json& v) {
     if (key == "Gain")          return std::make_unique<SetGainCommand>(serial, v.at("value").get<double>(), parseUnit(v));
     if (key == "Trigger Mode")  return std::make_unique<SetTriggerModeCommand>(serial, jsonToBool(v.at("value")));
 
-    // Pylon-Viewer-style live hardware AOI: {key:"Set AOI", camera_serial, width, height, offset_x, offset_y}.
+    // Pylon-Viewer-style live hardware AOI. The 4 pixel values ride in "value" (the backend
+    // relays that field intact): {key:"Set AOI", camera_serial, value:{width,height,offset_x,offset_y}}.
     if (key == "Set AOI") {
+        const json a = (v.contains("value") && v.at("value").is_object()) ? v.at("value") : v;
         auto gi = [&](const char* k) -> int64_t {
-            if (!v.contains(k)) return -1;
-            const auto& n = v.at(k);
+            if (!a.contains(k)) return -1;
+            const auto& n = a.at(k);
             if (n.is_number()) return static_cast<int64_t>(std::llround(n.get<double>()));
             if (n.is_string()) { try { return std::stoll(n.get<std::string>()); } catch (...) {} }
             return -1;
