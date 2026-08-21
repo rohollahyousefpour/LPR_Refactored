@@ -24,6 +24,24 @@ int main(int argc, char** argv) {
         auto device = std::make_unique<CameraDevice>(dev, "emu");
         if (!device->open()) { std::printf("open failed\n"); Pylon::PylonTerminate(); return 1; }
 
+        {
+            // Force a COLOR pixel format so a colour image comes back in colour (the emulated
+            // camera defaults to Mono8 -> everything is grey). List what's available, try RGB8.
+            GenApi::INodeMap& nm0 = device->raw()->GetNodeMap();
+            GenApi::CEnumerationPtr pf = nm0.GetNode("PixelFormat");
+            if (pf.IsValid()) {
+                GenApi::NodeList_t entries; pf->GetEntries(entries);
+                std::printf("PixelFormat options:");
+                for (auto* e : entries) { GenApi::CEnumEntryPtr ee(e); if (ee.IsValid() && GenApi::IsAvailable(ee)) std::printf(" %s", ee->GetSymbolic().c_str()); }
+                std::printf("\n");
+                for (const char* want : {"RGB8", "BGR8", "RGB8Packed", "BayerRG8"}) {
+                    GenApi::CEnumEntryPtr ee = pf->GetEntryByName(want);
+                    if (ee.IsValid() && GenApi::IsAvailable(ee) && GenApi::IsWritable(pf)) {
+                        pf->FromString(want); std::printf("PixelFormat set -> %s\n", want); break;
+                    }
+                }
+            }
+        }
         if (!dir.empty()) {
             GenApi::INodeMap& nm = device->raw()->GetNodeMap();
             GenApi::CStringPtr fn = nm.GetNode("ImageFilename");
@@ -34,6 +52,13 @@ int main(int argc, char** argv) {
             else std::printf("ImageFileMode node NOT available/writable\n");
         }
 
+        // Optional: dump the configured node map as a .pfs feature file (argv[3]) so the module
+        // can load it (CamconfigFile setting) and get the SAME colour-image behaviour at connect.
+        if (argc > 3) {
+            try { Pylon::CFeaturePersistence::Save(argv[3], &device->raw()->GetNodeMap());
+                  std::printf("saved pfs: %s\n", argv[3]); }
+            catch (const Pylon::GenericException& e) { std::printf("pfs save failed: %s\n", e.GetDescription()); }
+        }
         device->startGrabbing();
         cv::Mat frame; bool isColor = false;
         for (int i = 0; i < 5; ++i) device->retrieveBGR(frame, isColor, 2000);
