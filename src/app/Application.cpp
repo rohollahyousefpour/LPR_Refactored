@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <cstdlib>
 
@@ -475,6 +476,18 @@ std::unique_ptr<IPlateRecognizer> Application::buildRecognizerChain() {
                 return SettingsManager::instance().getCameraPoints(id, w, h);
             }
             catch (...) { return std::vector<cv::Point>{}; }
+        },
+        // Safety margin (px) so a plate on the ROI/polygon edge is read WHOLE, not clipped. Setting
+        // `roi_margin` is a FRACTION of the frame height (default 0.03 ≈ half a plate); it is skipped
+        // for a hardware-cropped camera (the frame is already the plate region — no software ROI).
+        [](const std::string& gate, int /*w*/, int h) -> int {
+            try {
+                const int id = std::stoi(gate);
+                if (SettingsManager::instance().detectionCropNorm(id)) return 0;
+                const float frac = SettingsManager::instance().getCameraSettingByIdAndKey<float>(id, "roi_margin").value_or(0.03f);
+                return frac > 0.f ? static_cast<int>(std::lround(frac * h)) : 0;
+            }
+            catch (...) { return 0; }
         });
 
     topRecognizer_ = roiRec_.get();

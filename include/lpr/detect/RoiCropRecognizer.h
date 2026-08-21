@@ -19,8 +19,12 @@ public:
     // gate,width,height -> polygon (full-frame pixels) outside which pixels are masked to 0.
     // Empty vector = no mask.
     using MaskProvider = std::function<std::vector<cv::Point>(const std::string& gate, int width, int height)>;
+    // gate,width,height -> safety-margin in PIXELS. The crop rect is grown by this margin on every
+    // side and the polygon mask is dilated by the same amount, so a plate straddling the ROI/polygon
+    // edge is captured WHOLE instead of being cut in half by the hard mask. 0 = exact ROI (no margin).
+    using MarginProvider = std::function<int(const std::string& gate, int width, int height)>;
 
-    RoiCropRecognizer(IPlateRecognizer& inner, RoiProvider roi, MaskProvider mask = {});
+    RoiCropRecognizer(IPlateRecognizer& inner, RoiProvider roi, MaskProvider mask = {}, MarginProvider margin = {});
 
     std::vector<PlateResult> recognize(const cv::Mat& frame,
                                        const std::string& gate, long timestamp) override;
@@ -31,9 +35,10 @@ public:
 
 private:
     IPlateRecognizer& inner_;
-    RoiProvider  roi_;
-    MaskProvider mask_;
-    cv::Point    lastOffset_{0, 0};   // crop.tl() from the last recognize(), to remap vehicles
+    RoiProvider    roi_;
+    MaskProvider   mask_;
+    MarginProvider margin_;
+    cv::Point      lastOffset_{0, 0};   // crop.tl() from the last recognize(), to remap vehicles
 };
 
 } // namespace lpr
