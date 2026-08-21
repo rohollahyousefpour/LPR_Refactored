@@ -277,6 +277,11 @@ std::unique_ptr<ICommand> makeCommand(const std::string& key, const json& v) {
     const std::string serial = v.value("camera_serial", std::string{});
     if (serial.empty()) { LOGW() << "[command] missing camera_serial for " << key; return nullptr; }
 
+    // Stream-activation ping: opens the manual-live stream (the caller marks the gate active on
+    // any non-revert command) WITHOUT touching the camera, so the operator sees the live view and
+    // the reported AOI/exposure the moment the panel opens — no need to nudge a real control first.
+    if (key == "Start Live" || key == "Live") return nullptr;
+
     if (key == "Exposure Time") return std::make_unique<SetExposureCommand>(serial, v.at("value").get<double>(), parseUnit(v));
     if (key == "Gain")          return std::make_unique<SetGainCommand>(serial, v.at("value").get<double>(), parseUnit(v));
     if (key == "Trigger Mode")  return std::make_unique<SetTriggerModeCommand>(serial, jsonToBool(v.at("value")));
