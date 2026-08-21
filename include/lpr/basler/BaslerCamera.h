@@ -44,6 +44,9 @@ public:
     // by serial, for the manual-control Pylon-Viewer-style AOI sliders.
     bool readAppliedAoi(const std::string& serial, Aoi& out) override;
 
+    // Report read-only device health for a sub-camera by serial (manual-control diagnostics tiles).
+    bool readAppliedDiag(const std::string& serial, Diag& out) override;
+
     // Fetch the latest grabbed frame for a sub-camera by serial (for the manual-control live view).
     bool latestFrame(const std::string& serial, cv::Mat& out) override;
 

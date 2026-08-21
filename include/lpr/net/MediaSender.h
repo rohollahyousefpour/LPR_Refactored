@@ -15,6 +15,7 @@
 #include "lpr/net/ImageCodec.h"
 
 #include <functional>
+#include <limits>
 #include <string>
 #include <map>
 #include <mutex>
@@ -70,6 +71,14 @@ public:
         // sliders. aoiWMax<=0 => AOI unavailable (omitted from the message).
         long aoiW = 0, aoiH = 0, aoiX = 0, aoiY = 0;
         long aoiWMax = 0, aoiHMax = 0, aoiWInc = 1, aoiHInc = 1, aoiXInc = 1, aoiYInc = 1;
+        // Read-only device health for the diagnostics tiles. hasDiag=false => "diag" omitted.
+        // Individual fields carry their own "unset" sentinels (NaN / -1 / empty string).
+        bool        hasDiag = false;
+        double      diagTempC   = std::numeric_limits<double>::quiet_NaN();
+        double      diagLinkMbps = -1;
+        double      diagFps     = -1;
+        long        diagIncomplete = -1;
+        std::string diagModel, diagFirmware, diagSerial;
     };
     // Manual-control live: ONE message ("live_manual_control") carrying every camera of a
     // gate (both sensors of a mono+RGB pair, or the single camera), each with its serial

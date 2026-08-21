@@ -72,6 +72,10 @@ public:
     // now, for the manual-control Pylon-Viewer-style AOI sliders. False if not connected.
     bool readAoi(const std::string& serial, lpr::CaptureSource::Aoi& out);
 
+    // Read-only device health (temperature / link speed / model / firmware) the named camera holds
+    // now, for the manual-control diagnostics tiles. False if not connected.
+    bool readDiag(const std::string& serial, lpr::CaptureSource::Diag& out);
+
     // Capture-thread entry: remove the faulted device, then start a reconnect
     // worker. Removal here (not in the worker) preserves the pointer-safety
     // invariant in CameraContext.

@@ -385,6 +385,30 @@ bool ConnectionSupervisor::readAoi(const std::string& serial, lpr::CaptureSource
     catch (...) { return false; }
 }
 
+bool ConnectionSupervisor::readDiag(const std::string& serial, lpr::CaptureSource::Diag& out) {
+    // Read-only device health for the manual-control diagnostics tiles. Called on the capture
+    // thread (same as the grab), so node reads don't race. Every field is best-effort: a node
+    // that isn't present just stays at its sentinel and the UI omits it.
+    std::lock_guard<std::mutex> lk(ctx_.devMutex);
+    auto it = ctx_.devices.find(serial);
+    if (it == ctx_.devices.end() || !it->second) return false;
+    auto* c = it->second->raw();
+    if (!c) return false;
+    try {
+        if (c->DeviceTemperature.IsReadable())        out.temperatureC  = c->DeviceTemperature.GetValue();
+        if (c->GevLinkSpeed.IsReadable())             out.linkSpeedMbps = double(c->GevLinkSpeed.GetValue());
+        if      (c->ResultingFrameRate.IsReadable())    out.fps = c->ResultingFrameRate.GetValue();
+        else if (c->ResultingFrameRateAbs.IsReadable()) out.fps = c->ResultingFrameRateAbs.GetValue();
+        if (c->DeviceModelName.IsReadable())          out.model    = c->DeviceModelName.GetValue().c_str();
+        if (c->DeviceFirmwareVersion.IsReadable())    out.firmware = c->DeviceFirmwareVersion.GetValue().c_str();
+        if (c->DeviceSerialNumber.IsReadable())       out.serial   = c->DeviceSerialNumber.GetValue().c_str();
+        else                                          out.serial   = serial;
+        return true;
+    }
+    catch (const Pylon::GenericException&) { return false; }
+    catch (...) { return false; }
+}
+
 void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {
     // Hardware sensor AOI crop from the NORMALIZED rect in the profile (set per role in
     // buildProfile: mono plate cam always, colour cam only when enabled). Shrinking the

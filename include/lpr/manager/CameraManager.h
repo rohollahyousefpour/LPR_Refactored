@@ -68,6 +68,9 @@ public:
     // Read a sub-camera's current hardware AOI + sensor ranges (manual-control AOI sliders).
     bool readAoi(const std::string& cameraId, const std::string& serial, CaptureSource::Aoi& out);
 
+    // Read a sub-camera's read-only device health (manual-control diagnostics tiles).
+    bool readDiag(const std::string& cameraId, const std::string& serial, CaptureSource::Diag& out);
+
 private:
     std::vector<std::unique_ptr<CameraWorker>> workers_;
     CameraWorker::FrameSink rawObserver_;

@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 
 namespace lpr {
@@ -60,6 +61,17 @@ std::string MediaSender::buildManualLiveMessage(const std::string& gate,
                 {"width_inc", c.aoiWInc}, {"height_inc", c.aoiHInc},
                 {"offset_x_inc", c.aoiXInc}, {"offset_y_inc", c.aoiYInc}
             };
+        }
+        if (c.hasDiag) {
+            json diag = json::object();
+            if (std::isfinite(c.diagTempC))   diag["temperature_c"] = c.diagTempC;
+            if (c.diagLinkMbps >= 0)          diag["link_mbps"]     = c.diagLinkMbps;
+            if (c.diagFps      >= 0)          diag["fps"]           = c.diagFps;
+            if (c.diagIncomplete >= 0)        diag["incomplete"]    = c.diagIncomplete;
+            if (!c.diagModel.empty())         diag["model"]         = c.diagModel;
+            if (!c.diagFirmware.empty())      diag["firmware"]      = c.diagFirmware;
+            if (!c.diagSerial.empty())        diag["serial"]        = c.diagSerial;
+            if (!diag.empty()) cam["diag"] = std::move(diag);
         }
         arr.push_back(std::move(cam));
     }

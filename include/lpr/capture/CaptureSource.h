@@ -4,6 +4,7 @@
 // and only ever passed by const-ref), and boost-free: it uses std::function
 // callbacks instead of boost::signals2.
 #include <functional>
+#include <limits>
 #include <string>
 
 namespace cv { class Mat; }   // forward declaration -> no OpenCV include needed here
@@ -57,6 +58,20 @@ public:
     };
     // Read the AOI a sub-camera holds now, by serial. Default: unsupported (false); Basler overrides.
     virtual bool readAppliedAoi(const std::string& /*serial*/, Aoi& /*out*/) { return false; }
+
+    // Read-only device health for the manual-control diagnostics tiles. Any field left at its
+    // sentinel (temperatureC = NaN, empty string, link/frame < 0) is simply not shown.
+    struct Diag {
+        double      temperatureC = std::numeric_limits<double>::quiet_NaN(); // DeviceTemperature (°C)
+        double      linkSpeedMbps = -1;                                      // GevLinkSpeed (Mb/s)
+        double      fps           = -1;                                      // measured grab rate
+        long        incompleteFrames = -1;                                   // failed/partial buffers
+        std::string model;                                                   // DeviceModelName
+        std::string firmware;                                                // DeviceFirmwareVersion
+        std::string serial;                                                  // DeviceSerialNumber
+    };
+    // Read the current device health of a sub-camera, by serial. Default: unsupported (false).
+    virtual bool readAppliedDiag(const std::string& /*serial*/, Diag& /*out*/) { return false; }
 
 protected:
     void emitFrame(const cv::Mat& f, const cv::Mat& m, long t) { if (frameCb_) frameCb_(f, m, t); }

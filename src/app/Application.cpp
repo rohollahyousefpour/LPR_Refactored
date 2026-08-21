@@ -287,6 +287,14 @@ void Application::publishManualLive(const FrameItem& f) {
             c.aoiWInc = aoi.widthInc; c.aoiHInc = aoi.heightInc;
             c.aoiXInc = aoi.offsetXInc; c.aoiYInc = aoi.offsetYInc;
         }
+        // Read-only device health for the diagnostics tiles (temperature / link / model / …).
+        CaptureSource::Diag diag;
+        if (cameras_ && cameras_->readDiag(f.gate, c.serial, diag)) {
+            c.hasDiag = true;
+            c.diagTempC = diag.temperatureC; c.diagLinkMbps = diag.linkSpeedMbps;
+            c.diagFps = diag.fps; c.diagIncomplete = diag.incompleteFrames;
+            c.diagModel = diag.model; c.diagFirmware = diag.firmware; c.diagSerial = diag.serial;
+        }
         // Prefer the exposure/gain the sensor ACTUALLY holds now (ground truth, post-clamp /
         // post-increment coercion) so the operator tunes against reality, not the request.
         double us = 0.0, g = 0.0;
