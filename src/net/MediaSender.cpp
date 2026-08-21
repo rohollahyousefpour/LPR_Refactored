@@ -74,25 +74,31 @@ void MediaSender::sendManualLive(const std::string& gate, const std::vector<Manu
     transport_.publish(cfg_.liveSubject, buildManualLiveMessage(gate, cams));
 }
 
-std::string MediaSender::buildCrudeMessage(const std::string& gate, const cv::Mat& frame) const {
+std::string MediaSender::buildCrudeMessage(const std::string& gate, const cv::Mat& frame,
+                                           const std::string& role) const {
+    json body = {
+        {"camera_id", gate},
+        {"crud_image", encodeJpeg(frame, cfg_.crudeJpegQuality, cfg_.imageEncoding)}
+    };
+    // role="color" marks the COLOUR-evidence reference of a mono+colour pair, so the backend
+    // stores it separately from the (mono) detection reference. Absent/empty => the mono reference.
+    if (!role.empty()) body["role"] = role;
     json document = {
         {"messageId", generateUuidV4()},
         {"messageType", "crud_image"},
-        {"messageBody", {
-            {"camera_id", gate},
-            {"crud_image", encodeJpeg(frame, cfg_.crudeJpegQuality, cfg_.imageEncoding)}
-        }}
+        {"messageBody", std::move(body)}
     };
     return document.dump();
 }
 
-void MediaSender::sendCrudeImage(const std::string& gate, const cv::Mat& frame) {
+void MediaSender::sendCrudeImage(const std::string& gate, const cv::Mat& frame, const std::string& role) {
     if (frame.empty()) {
         LOGW() << "MediaSender: crud_image SKIPPED gate=" << gate << " (empty frame)";
         return;
     }
-    const std::string payload = buildCrudeMessage(gate, frame);
-    LOGI() << "MediaSender: >>> crud_image gate=" << gate << " frame=" << frame.cols << "x" << frame.rows
+    const std::string payload = buildCrudeMessage(gate, frame, role);
+    LOGI() << "MediaSender: >>> crud_image gate=" << gate << " role=" << (role.empty() ? "mono" : role)
+           << " frame=" << frame.cols << "x" << frame.rows
            << " payload=" << payload.size() << " bytes -> '" << cfg_.crudeSubject << "'";
     transport_.publish(cfg_.crudeSubject, payload);
 }

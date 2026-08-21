@@ -101,6 +101,7 @@ void CameraWorker::supervise() {
         emitStatus(false);
         connected_  = false;   // so the next successful frame re-emits "connected"
         firstFrame_ = true;     // and the first-frame hook (ROI calc) runs again after reconnect
+        firstColorFrame_ = true;   // re-send the colour reference too after a reconnect
         if (stable) backoff = cfg_.reconnectBaseMs;                 // (b) reset after a stable session
         LOGW() << "CameraWorker[" << gate_ << "]: reconnecting in " << backoff << "ms";
         std::unique_lock<std::mutex> lk(waitMtx_);
@@ -166,7 +167,16 @@ void CameraWorker::onFrame(const cv::Mat& frame, const cv::Mat& mono, long times
     // co-located / rectified mono+RGB pair). If a deployment's color and mono differ a lot in
     // framing, the boxes on the live view may be offset (detection itself is unaffected).
     const cv::Mat& liveImg = haveSeparateEvidence ? evidenceImg : detectImg;
-    if (firstFrame_) { firstFrame_ = false; if (firstFrameCb_) firstFrameCb_(gate_, liveImg); }
+    // Reference images for the operator's editors, sent once each:
+    //   * the DETECTION frame (mono for a pair) -> the ROI/zone reference (drawn where detection
+    //     actually runs), fired as soon as the first frame arrives.
+    //   * for a mono+colour PAIR, the COLOUR evidence frame -> the colour-crop reference, fired
+    //     when the colour stream first appears (it lags the mono/IR frame by a beat).
+    if (firstFrame_) { firstFrame_ = false; if (firstFrameCb_) firstFrameCb_(gate_, detectImg, false); }
+    if (firstColorFrame_ && haveSeparateEvidence) {
+        firstColorFrame_ = false;
+        if (firstFrameCb_) firstFrameCb_(gate_, evidenceImg, true);
+    }
     if (rawObserver_) {
         FrameItem raw;
         raw.image = liveImg;          // shared header; live encodes immediately, no clone needed

@@ -37,7 +37,10 @@ public:
     using SourceFactoryFn    = std::function<std::unique_ptr<CaptureSource>()>;
     using FrameSink          = std::function<void(FrameItem&&)>;
     using StatusCallback     = std::function<void(const std::string& gate, bool connected)>;
-    using FirstFrameCallback = std::function<void(const std::string& gate, const cv::Mat& fullFrame)>;
+    // Fires with a reference frame for the operator's editors: colorVariant=false is the
+    // DETECTION frame (mono for a pair) — the ROI/zone reference; colorVariant=true is the
+    // COLOUR evidence frame of a mono+colour pair — the colour-crop reference.
+    using FirstFrameCallback = std::function<void(const std::string& gate, const cv::Mat& frame, bool colorVariant)>;
 
     CameraWorker(std::string gate, SourceFactoryFn factory, MotionConfig cfg = {});
     ~CameraWorker();
@@ -119,7 +122,8 @@ private:
     cv::Rect   roi_;
     std::mutex roiMtx_;
     bool       connected_  = false;
-    bool       firstFrame_ = true;
+    bool       firstFrame_ = true;        // detection (mono) reference — for the ROI/zone editor
+    bool       firstColorFrame_ = true;   // colour evidence reference — for the colour-crop editor
 };
 
 } // namespace lpr

@@ -52,8 +52,10 @@ public:
     void sendRecordingEvent(const std::string& gate, const std::string& videoAddress,
                             bool endRecording, const cv::Mat& frame = cv::Mat());
     // First-frame "crud_image": the full crude frame the backend uses to let the operator
-    // draw the ROI polygon (plate reading region). Sent once per camera at start.
-    void sendCrudeImage(const std::string& gate, const cv::Mat& frame);
+    // draw the ROI polygon (plate reading region). Sent once per camera at start. role="color"
+    // marks the COLOUR-evidence reference of a mono+colour pair (for the colour-crop editor),
+    // stored separately from the (mono) detection reference; empty/absent => the mono reference.
+    void sendCrudeImage(const std::string& gate, const cv::Mat& frame, const std::string& role = "");
     // On-demand screenshot: current frame for a camera, returned in response to a command.
     void sendScreenshot(const std::string& gate, const cv::Mat& frame);
 
@@ -84,7 +86,8 @@ public:
     std::string buildLiveMessage(const std::string& gate, const cv::Mat& img) const;
     std::string buildManualLiveMessage(const std::string& gate,
                                        const std::vector<ManualLiveCam>& cams) const;
-    std::string buildCrudeMessage(const std::string& gate, const cv::Mat& frame) const;
+    std::string buildCrudeMessage(const std::string& gate, const cv::Mat& frame,
+                                  const std::string& role = "") const;
     std::string buildScreenshotMessage(const std::string& gate, const cv::Mat& frame) const;
     std::string buildRecordingMessage(const std::string& gate, const std::string& videoAddress,
                                       bool endRecording, const cv::Mat& frame) const;

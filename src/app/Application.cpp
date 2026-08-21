@@ -732,10 +732,12 @@ void Application::bootstrapFromJson(const json& settingsBody) {
     // On the first frame of each camera, send the full crude image so the backend can let
     // the operator draw the ROI polygon (plate reading region) — matches the original
     // send_crud_file / "crud_image" on subject message.crud.
-    cameras_->setFirstFrameObserver([this](const std::string& gate, const cv::Mat& fullFrame) {
+    cameras_->setFirstFrameObserver([this](const std::string& gate, const cv::Mat& fullFrame, bool colorVariant) {
         LOGI() << "Application: first frame for camera " << gate << " (" << fullFrame.cols << "x"
-               << fullFrame.rows << "); sending crud_image";
-        if (media_) media_->sendCrudeImage(gate, fullFrame);
+               << fullFrame.rows << ") " << (colorVariant ? "COLOUR" : "mono") << "; sending crud_image";
+        // colorVariant => the pair's colour-evidence reference (role="color") for the colour-crop
+        // editor; else the (mono) detection reference for the ROI/zone editor.
+        if (media_) media_->sendCrudeImage(gate, fullFrame, colorVariant ? "color" : "");
         else        LOGW() << "Application: no media sender; crud_image not sent for camera " << gate;
     });
     cameras_->buildFromSettings();
