@@ -409,6 +409,13 @@ bool ConnectionSupervisor::readDiag(const std::string& serial, lpr::CaptureSourc
     catch (...) { return false; }
 }
 
+bool ConnectionSupervisor::takePendingPreset(const std::string& serial, std::string& out) {
+    std::lock_guard<std::mutex> lk(ctx_.devMutex);
+    auto it = ctx_.devices.find(serial);
+    if (it == ctx_.devices.end() || !it->second) return false;
+    return it->second->takePendingPreset(out);
+}
+
 void ConnectionSupervisor::applyRoi(CameraDevice& dev, const Profile& p) {
     // Hardware sensor AOI crop from the NORMALIZED rect in the profile (set per role in
     // buildProfile: mono plate cam always, colour cam only when enabled). Shrinking the

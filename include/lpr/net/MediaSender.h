@@ -79,6 +79,8 @@ public:
         double      diagFps     = -1;
         long        diagIncomplete = -1;
         std::string diagModel, diagFirmware, diagSerial;
+        // One-shot exported preset (.pfs text) to hand the browser for download; empty => omitted.
+        std::string preset;
     };
     // Manual-control live: ONE message ("live_manual_control") carrying every camera of a
     // gate (both sensors of a mono+RGB pair, or the single camera), each with its serial

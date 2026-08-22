@@ -296,6 +296,9 @@ void Application::publishManualLive(const FrameItem& f) {
             c.diagFps = diag.fps; c.diagIncomplete = diag.incompleteFrames;
             c.diagModel = diag.model; c.diagFirmware = diag.firmware; c.diagSerial = diag.serial;
         }
+        // One-shot: a just-exported preset (.pfs text) to ship to the browser for download.
+        std::string pfs;
+        if (cameras_ && cameras_->readPreset(f.gate, c.serial, pfs)) c.preset = std::move(pfs);
         // Prefer the exposure/gain the sensor ACTUALLY holds now (ground truth, post-clamp /
         // post-increment coercion) so the operator tunes against reality, not the request.
         double us = 0.0, g = 0.0;

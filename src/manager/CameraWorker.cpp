@@ -42,6 +42,11 @@ bool CameraWorker::readDiag(const std::string& serial, CaptureSource::Diag& out)
     return source_ && source_->readAppliedDiag(serial, out);
 }
 
+bool CameraWorker::readPreset(const std::string& serial, std::string& out) {
+    std::lock_guard<std::mutex> lk(sourceMtx_);
+    return source_ && source_->readAppliedPreset(serial, out);
+}
+
 void CameraWorker::start() {
     if (running_.exchange(true)) return;
     if (supervisor_.joinable()) supervisor_.join();   // join a previously self-stopped run

@@ -18,6 +18,7 @@
 //   (the destructor) and one place that knows the Pylon node quirks.
 //
 #include <memory>
+#include <mutex>
 #include <string>
 #include <pylon/PylonIncludes.h>                 // CImageFormatConverter, CPylonImage, etc.
 #include <pylon/BaslerUniversalInstantCamera.h>
@@ -73,6 +74,16 @@ public:
     // control. Returns nullptr if the device was never constructed.
     PylonCamera* raw() { return cam_.get(); }
 
+    // One-shot preset export: an "Export Preset" command does SaveToString and stashes the .pfs
+    // text here; the manual-live fill lambda takes it (clearing it) and ships it to the operator's
+    // browser for download — so a plate reader on a SEPARATE host from the server is still portable.
+    void setPendingPreset(std::string s) { std::lock_guard<std::mutex> lk(presetMtx_); pendingPreset_ = std::move(s); }
+    bool takePendingPreset(std::string& out) {
+        std::lock_guard<std::mutex> lk(presetMtx_);
+        if (pendingPreset_.empty()) return false;
+        out.swap(pendingPreset_); pendingPreset_.clear(); return true;
+    }
+
 private:
     void hardRelease() noexcept;           // stop/close/detach/destroy, no throw
 
@@ -80,4 +91,6 @@ private:
     std::shared_ptr<PylonCamera> cam_;
     Pylon::CImageFormatConverter converter_;
     bool                         lastIsColor_ = false;   // cached PixelFormat colorness
+    std::mutex                   presetMtx_;
+    std::string                  pendingPreset_;
 };

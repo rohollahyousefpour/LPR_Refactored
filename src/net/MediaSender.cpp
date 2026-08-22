@@ -73,6 +73,7 @@ std::string MediaSender::buildManualLiveMessage(const std::string& gate,
             if (!c.diagSerial.empty())        diag["serial"]        = c.diagSerial;
             if (!diag.empty()) cam["diag"] = std::move(diag);
         }
+        if (!c.preset.empty()) cam["preset"] = c.preset;   // one-shot .pfs text for browser download
         arr.push_back(std::move(cam));
     }
     json document = {

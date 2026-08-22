@@ -71,6 +71,9 @@ public:
     // Read a sub-camera's read-only device health (manual-control diagnostics tiles).
     bool readDiag(const std::string& cameraId, const std::string& serial, CaptureSource::Diag& out);
 
+    // Take (return + clear) a one-shot exported preset (.pfs text) stashed after "Export Preset".
+    bool readPreset(const std::string& cameraId, const std::string& serial, std::string& out);
+
 private:
     std::vector<std::unique_ptr<CameraWorker>> workers_;
     CameraWorker::FrameSink rawObserver_;

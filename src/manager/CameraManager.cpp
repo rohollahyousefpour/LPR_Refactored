@@ -90,6 +90,14 @@ bool CameraManager::readDiag(const std::string& cameraId, const std::string& ser
     return false;
 }
 
+bool CameraManager::readPreset(const std::string& cameraId, const std::string& serial, std::string& out) {
+    for (auto& w : workers_) {
+        if (w && w->gate() == cameraId)
+            return w->readPreset(serial, out);
+    }
+    return false;
+}
+
 } // namespace lpr
 
 // --- settings-driven construction (bridge to the ported SettingsManager) ---

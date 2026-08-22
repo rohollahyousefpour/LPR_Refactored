@@ -303,6 +303,42 @@ struct FactoryResetCommand : ICommand {
     const char* name() const override { return "FactoryReset"; }
 };
 
+// Export the current node map as a .pfs TEXT string and stash it on the device; the manual-live
+// stream ships it to the operator's browser for download (works even when the reader host has no
+// shared filesystem with the server).
+struct ExportPresetCommand : ICommand {
+    std::string serial;
+    explicit ExportPresetCommand(std::string s) : serial(std::move(s)) {}
+    void execute(const CameraResolver& resolve, IExposureController* /*ctrl*/) override {
+        auto* d = resolve(serial); if (!d || !d->raw()) return;
+        Pylon::String_t s;
+        Pylon::CFeaturePersistence::SaveToString(s, &d->raw()->GetNodeMap());
+        d->setPendingPreset(std::string(s.c_str()));
+        LOGI() << "[preset][" << serial << "] exported (" << s.length() << " bytes) for download";
+    }
+    const char* name() const override { return "ExportPreset"; }
+};
+
+// Apply a .pfs given as TEXT (uploaded from the operator's browser) — the portable counterpart of
+// Export. Stop/restart the grab like a file load.
+struct ImportPresetCommand : ICommand {
+    std::string serial, pfs;
+    ImportPresetCommand(std::string s, std::string p) : serial(std::move(s)), pfs(std::move(p)) {}
+    void execute(const CameraResolver& resolve, IExposureController* /*ctrl*/) override {
+        auto* d = resolve(serial); if (!d || !d->raw()) return;
+        const bool wasGrabbing = d->isGrabbing();
+        if (wasGrabbing) d->stopGrabbing();
+        try {
+            Pylon::CFeaturePersistence::LoadFromString(Pylon::String_t(pfs.c_str()), &d->raw()->GetNodeMap(), /*validate*/false);
+            LOGI() << "[preset][" << serial << "] imported (" << pfs.size() << " bytes) and applied";
+        } catch (const Pylon::GenericException& e) {
+            LOGW() << "[preset][" << serial << "] import failed: " << e.GetDescription();
+        }
+        if (wasGrabbing) d->startGrabbing();
+    }
+    const char* name() const override { return "ImportPreset"; }
+};
+
 struct ApplySyncRoleCommand : ICommand {
     std::string serial; std::shared_ptr<ISyncConfigurator> cfg;
     ApplySyncRoleCommand(std::string s, std::shared_ptr<ISyncConfigurator> c)
@@ -375,6 +411,15 @@ std::unique_ptr<ICommand> makeCommand(const std::string& key, const json& v) {
         if (path.empty()) { LOGW() << "[command] '" << key << "' needs value.path"; return nullptr; }
         if (key == "Save Preset") return std::make_unique<SavePresetCommand>(serial, path);
         return std::make_unique<LoadPresetCommand>(serial, path);
+    }
+    // Portable preset: export the current state as .pfs TEXT (shipped back for browser download),
+    // or import .pfs TEXT uploaded from the browser. {key:"Import Preset", value:{pfs:"..."}}.
+    if (key == "Export Preset") return std::make_unique<ExportPresetCommand>(serial);
+    if (key == "Import Preset") {
+        const json a = (v.contains("value") && v.at("value").is_object()) ? v.at("value") : v;
+        const std::string pfs = a.value("pfs", std::string{});
+        if (pfs.empty()) { LOGW() << "[command] 'Import Preset' needs value.pfs"; return nullptr; }
+        return std::make_unique<ImportPresetCommand>(serial, pfs);
     }
     // Factory reset: load the camera's Default user set.
     if (key == "Factory Reset") return std::make_unique<FactoryResetCommand>(serial);

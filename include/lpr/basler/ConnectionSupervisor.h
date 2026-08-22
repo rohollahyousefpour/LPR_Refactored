@@ -76,6 +76,10 @@ public:
     // now, for the manual-control diagnostics tiles. False if not connected.
     bool readDiag(const std::string& serial, lpr::CaptureSource::Diag& out);
 
+    // Take (return + clear) a one-shot exported preset (.pfs text) stashed by an "Export Preset"
+    // command on the named camera. False if none pending / not connected.
+    bool takePendingPreset(const std::string& serial, std::string& out);
+
     // Capture-thread entry: remove the faulted device, then start a reconnect
     // worker. Removal here (not in the worker) preserves the pointer-safety
     // invariant in CameraContext.

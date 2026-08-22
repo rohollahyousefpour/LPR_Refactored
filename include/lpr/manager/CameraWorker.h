@@ -88,6 +88,9 @@ public:
     // Read the sub-camera's read-only device health (manual-control diagnostics tiles).
     bool readDiag(const std::string& serial, CaptureSource::Diag& out);
 
+    // Take (return + clear) a one-shot exported preset (.pfs text) stashed after "Export Preset".
+    bool readPreset(const std::string& serial, std::string& out);
+
     // Fetch the latest frame a sub-camera (by serial) grabbed, for the manual-control live view.
     bool latestFrame(const std::string& serial, cv::Mat& out);
 

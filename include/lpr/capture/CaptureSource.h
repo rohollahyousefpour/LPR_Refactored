@@ -73,6 +73,11 @@ public:
     // Read the current device health of a sub-camera, by serial. Default: unsupported (false).
     virtual bool readAppliedDiag(const std::string& /*serial*/, Diag& /*out*/) { return false; }
 
+    // Take (return + clear) a one-shot exported preset (.pfs text) a sub-camera stashed after an
+    // "Export Preset" command, so the manual-live stream can ship it to the browser for download.
+    // Default: unsupported (false); Basler overrides. `out` is set only on true.
+    virtual bool readAppliedPreset(const std::string& /*serial*/, std::string& /*out*/) { return false; }
+
 protected:
     void emitFrame(const cv::Mat& f, const cv::Mat& m, long t) { if (frameCb_) frameCb_(f, m, t); }
     void emitError() { if (errorCb_) errorCb_(); }
