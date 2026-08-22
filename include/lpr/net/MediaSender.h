@@ -30,6 +30,9 @@ public:
     struct Config {
         std::string   liveSubject            = "socketio.live";
         std::string   recordingSubjectPrefix = "message.recording.";   // + gate
+        std::string   recordingUploadSubjectPrefix = "message.recording_upload."; // + gate (chunked video)
+        bool          uploadRecordings       = true;   // stream finished segments to the server storage
+        int           recordingUploadChunk   = 512 * 1024; // raw bytes per NATS chunk (base64 ~1.33x)
         std::string   crudeSubject           = "message.crud";         // first-frame "crud_image"
         std::string   screenshotSubject      = "message.screenshot";   // on-demand screenshot reply
         int           liveJpegQuality        = 20;
@@ -90,6 +93,11 @@ public:
     // Adapters that plug into the services built earlier.
     std::function<void(const std::string&, const cv::Mat&)>   liveSink();
     std::function<void(const std::string&, const std::string&)> recordingCallback();
+
+    // Stream a finished recording file to the server in ordered base64 chunks over
+    // `recordingUploadSubjectPrefix + gate`, so the dashboard can view/download it even when the
+    // reader host is separate from the server. No-op if uploadRecordings is off.
+    void uploadRecording(const std::string& gate, const std::string& filePath);
 
     // While a camera is under manual control, tag its live messages with the
     // physical camera serial so the backend knows which camera the image is for.

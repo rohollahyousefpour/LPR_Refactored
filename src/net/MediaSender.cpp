@@ -1,6 +1,7 @@
 #include "lpr/net/MediaSender.h"
 #include "lpr/util/Uuid.h"
 #include "lpr/util/Time.h"
+#include "lpr/util/Base64.h"
 #include "lpr/Log.h"
 
 #include <nlohmann/json.hpp>
@@ -8,6 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <cstdint>
+#include <fstream>
+#include <vector>
 
 namespace lpr {
 
@@ -208,10 +212,63 @@ std::function<void(const std::string&, const cv::Mat&)> MediaSender::liveSink() 
     return [this](const std::string& gate, const cv::Mat& img) { this->sendLiveFrame(gate, img); };
 }
 
+void MediaSender::uploadRecording(const std::string& gate, const std::string& filePath) {
+    if (!cfg_.uploadRecordings) return;
+    std::ifstream in(filePath, std::ios::binary);
+    if (!in) { LOGW() << "MediaSender: recording upload skipped, cannot open " << filePath; return; }
+    in.seekg(0, std::ios::end);
+    const std::uintmax_t size = static_cast<std::uintmax_t>(in.tellg());
+    in.seekg(0, std::ios::beg);
+    if (size == 0) { LOGW() << "MediaSender: recording upload skipped, empty " << filePath; return; }
+
+    const std::size_t chunk = std::max<std::size_t>(64 * 1024, static_cast<std::size_t>(cfg_.recordingUploadChunk));
+    const std::size_t total = static_cast<std::size_t>((size + chunk - 1) / chunk);
+    const std::string uploadId = generateUuidV4();
+
+    // basename + extension from the path.
+    std::string base = filePath;
+    if (auto s = base.find_last_of("/\\"); s != std::string::npos) base = base.substr(s + 1);
+    std::string ext = "mp4";
+    if (auto d = base.find_last_of('.'); d != std::string::npos && d + 1 < base.size()) ext = base.substr(d + 1);
+
+    LOGI() << "MediaSender: >>> uploading recording gate=" << gate << " '" << filePath
+           << "' size=" << size << " chunks=" << total << " to '" << cfg_.recordingUploadSubjectPrefix << gate << "'";
+
+    std::vector<char> buf(chunk);
+    std::size_t seq = 0;
+    while (in && seq < total) {
+        in.read(buf.data(), static_cast<std::streamsize>(chunk));
+        const std::streamsize got = in.gcount();
+        if (got <= 0) break;
+        const bool isFinal = (seq + 1 >= total);
+        json msg = {
+            {"messageId", generateUuidV4()},
+            {"messageType", "recording_upload"},
+            {"messageBody", {
+                {"upload_id", uploadId},
+                {"camera_id", gate},
+                {"title", base},
+                {"video_address", filePath},
+                {"ext", ext},
+                {"seq", seq},
+                {"total", total},
+                {"final", isFinal},
+                {"data_b64", base64_encode(reinterpret_cast<const unsigned char*>(buf.data()),
+                                           static_cast<size_t>(got))}
+            }}
+        };
+        transport_.publish(cfg_.recordingUploadSubjectPrefix + gate, msg.dump());
+        ++seq;
+    }
+    LOGI() << "MediaSender: recording upload finished gate=" << gate << " sent " << seq << "/" << total << " chunks";
+}
+
 std::function<void(const std::string&, const std::string&)> MediaSender::recordingCallback() {
-    // RecordingService fires (gate, path) when a segment closes -> a recording event (end=true).
+    // RecordingService fires (gate, path) when a segment closes -> a recording event (end=true),
+    // then stream the finished file to the server so it can be viewed/downloaded from the dashboard.
     return [this](const std::string& gate, const std::string& path) {
         this->sendRecordingEvent(gate, path, /*endRecording*/true, cv::Mat());
+        this->uploadRecording(gate, path);
     };
 }
 
