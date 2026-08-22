@@ -3,9 +3,11 @@
 #include "IExposureStrategy.h"
 #include "ISyncConfigurator.h"
 #include "AppLogger.h"
+#include <pylon/FeaturePersistence.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <string>
 
 // ---- CommandQueue ----
@@ -235,6 +237,72 @@ struct SetAoiCommand : ICommand {
     const char* name() const override { return "SetAoi"; }
 };
 
+// Save the camera's CURRENT node map to a Pylon .pfs feature file (the whole live state:
+// exposure/gain/gamma/white-balance/AOI/trigger/…). The frontend then points CamconfigFile at
+// this path so it re-loads on the next start. Runs on the capture thread (no grab in flight).
+struct SavePresetCommand : ICommand {
+    std::string serial, path;
+    SavePresetCommand(std::string s, std::string p) : serial(std::move(s)), path(std::move(p)) {}
+    void execute(const CameraResolver& resolve, IExposureController* /*ctrl*/) override {
+        auto* d = resolve(serial); if (!d || !d->raw()) return;
+        std::error_code ec;
+        const std::filesystem::path fp(path);
+        if (fp.has_parent_path()) std::filesystem::create_directories(fp.parent_path(), ec);
+        Pylon::CFeaturePersistence::Save(path.c_str(), &d->raw()->GetNodeMap());
+        LOGI() << "[preset][" << serial << "] saved -> " << path;
+    }
+    const char* name() const override { return "SavePreset"; }
+};
+
+// Apply a .pfs feature file to the camera LIVE. Some nodes it restores (PixelFormat / AOI) are
+// acquisition-locked, so stop the grab, load, and restart — like SetAoiCommand.
+struct LoadPresetCommand : ICommand {
+    std::string serial, path;
+    LoadPresetCommand(std::string s, std::string p) : serial(std::move(s)), path(std::move(p)) {}
+    void execute(const CameraResolver& resolve, IExposureController* /*ctrl*/) override {
+        auto* d = resolve(serial); if (!d || !d->raw()) return;
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec) || ec) {
+            LOGW() << "[preset][" << serial << "] not found: " << path; return;
+        }
+        const bool wasGrabbing = d->isGrabbing();
+        if (wasGrabbing) d->stopGrabbing();
+        try {
+            Pylon::CFeaturePersistence::Load(path.c_str(), &d->raw()->GetNodeMap(), /*validate*/false);
+            LOGI() << "[preset][" << serial << "] loaded <- " << path;
+        } catch (const Pylon::GenericException& e) {
+            LOGW() << "[preset][" << serial << "] load failed: " << e.GetDescription();
+        }
+        if (wasGrabbing) d->startGrabbing();
+    }
+    const char* name() const override { return "LoadPreset"; }
+};
+
+// Factory reset: load the camera's Default user set (its power-on defaults), guarded so a camera
+// (or the emulator) without a UserSet just logs and skips. Stop/restart around it like a preset load.
+struct FactoryResetCommand : ICommand {
+    std::string serial;
+    explicit FactoryResetCommand(std::string s) : serial(std::move(s)) {}
+    void execute(const CameraResolver& resolve, IExposureController* /*ctrl*/) override {
+        auto* d = resolve(serial); if (!d || !d->raw()) return;
+        auto& nm = d->raw()->GetNodeMap();
+        const bool wasGrabbing = d->isGrabbing();
+        if (wasGrabbing) d->stopGrabbing();
+        try {
+            Pylon::CEnumParameter sel(nm, "UserSetSelector");
+            bool picked = false;
+            if (sel.IsWritable()) picked = sel.TrySetValue("Default") || sel.TrySetValue("UserSetDefault");
+            Pylon::CCommandParameter load(nm, "UserSetLoad");
+            if (picked && load.IsValid()) { load.Execute(); LOGI() << "[preset][" << serial << "] factory reset (UserSet=Default)"; }
+            else LOGW() << "[preset][" << serial << "] factory reset unavailable (no UserSet)";
+        } catch (const Pylon::GenericException& e) {
+            LOGW() << "[preset][" << serial << "] factory reset failed: " << e.GetDescription();
+        }
+        if (wasGrabbing) d->startGrabbing();
+    }
+    const char* name() const override { return "FactoryReset"; }
+};
+
 struct ApplySyncRoleCommand : ICommand {
     std::string serial; std::shared_ptr<ISyncConfigurator> cfg;
     ApplySyncRoleCommand(std::string s, std::shared_ptr<ISyncConfigurator> c)
@@ -299,6 +367,17 @@ std::unique_ptr<ICommand> makeCommand(const std::string& key, const json& v) {
         };
         return std::make_unique<SetAoiCommand>(serial, gi("width"), gi("height"), gi("offset_x"), gi("offset_y"));
     }
+
+    // Preset workflow (.pfs): {key:"Save Preset"|"Load Preset", camera_serial, value:{path:"..."}}.
+    if (key == "Save Preset" || key == "Load Preset") {
+        const json a = (v.contains("value") && v.at("value").is_object()) ? v.at("value") : v;
+        const std::string path = a.value("path", std::string{});
+        if (path.empty()) { LOGW() << "[command] '" << key << "' needs value.path"; return nullptr; }
+        if (key == "Save Preset") return std::make_unique<SavePresetCommand>(serial, path);
+        return std::make_unique<LoadPresetCommand>(serial, path);
+    }
+    // Factory reset: load the camera's Default user set.
+    if (key == "Factory Reset") return std::make_unique<FactoryResetCommand>(serial);
 
     // Return to the camera's configured (NATS-loaded) settings / auto control.
     if (key == "Use Settings" || key == "Reset")
