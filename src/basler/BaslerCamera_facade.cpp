@@ -99,6 +99,9 @@ void BaslerCamera::readSettings() {
     maxGain_      = s.getCameraSettingByIdAndKey<int>(cameraId_, "maxGain").value_or(25);
     minGain_      = s.getCameraSettingByIdAndKey<int>(cameraId_, "minGain").value_or(5);
     triggerOn_    = s.getCameraSettingByIdAndKey<int>(cameraId_, "trigger_mode").value_or(0);
+    // `rgb_free_run=1` frees the pair RGB from the mono master's trigger (independent free-run),
+    // for deployments with no hardware trigger wire to the RGB camera.
+    rgbFreeRun_   = s.getCameraSettingByIdAndKey<int>(cameraId_, "rgb_free_run").value_or(0);
     autoExposure_ = s.getCameraSettingByIdAndKey<int>(cameraId_, "continuous_exposure").value_or(1) != 0;
     rgbPfs_       = s.getCameraSettingByIdAndKey<std::string>(cameraId_, "CamconfigFile").value_or("");
     // Mono/IR plate camera feature file. Settings-driven and OPTIONAL: default empty
@@ -140,7 +143,7 @@ std::string BaslerCamera::hwSnapshot() const {
     auto cf = [&](const char* k){ o << k << '=' << s.getCameraSettingByIdAndKey<float>(id, k).value_or(-1e30f) << ';'; };
     auto cs = [&](const char* k){ o << k << '=' << s.getCameraSettingByIdAndKey<std::string>(id, k).value_or("") << ';'; };
     auto li = [&](const char* k){ o << k << '=' << s.getLpr<int>(k).value_or(INT_MIN) << ';'; };
-    ci("maxExposure"); ci("maxGain"); ci("minGain"); ci("trigger_mode"); ci("continuous_exposure");
+    ci("maxExposure"); ci("maxGain"); ci("minGain"); ci("trigger_mode"); ci("rgb_free_run"); ci("continuous_exposure");
     cs("CamconfigFile"); cs("MonoCamconfigFile");
     ci("exposure_target"); ci("exposure_percentile"); ci("exposure_deadband");
     cf("exposure_damping"); cf("exposure_step_ratio"); cf("exposure_ema");
@@ -249,12 +252,15 @@ BaslerCamera::buildProfile(const std::string& serial, bool mono, bool /*master*/
     //   RGB in a pair       -> slave, triggered (config-1)   [hasMono_]
     //   single RGB, tm == 1 -> slave, triggered (config-1)
     //   single RGB, tm == 0 -> free-run         (config-2)
-    // trigger_mode only decides the SINGLE-camera case; a pair RGB is always a
-    // slave regardless of trigger_mode.
+    // trigger_mode decides the SINGLE-camera case; a pair RGB is a slave by default
+    // (so it exposes under the mono master's IR strobe). EXCEPTION: `rgb_free_run=1`
+    // makes the pair RGB free-run (config-2) independently — for deployments with NO
+    // hardware trigger wire to the RGB (else it opens but never grabs). The mono stays
+    // the master/strobe either way.
     if (mono) {
         p.triggerOn = false;                       // mono master always free-runs
     } else {
-        p.triggerOn = (hasMono_ || triggerOn_ == 1); // pair RGB OR single tm==1 => slave
+        p.triggerOn = (rgbFreeRun_ != 1) && (hasMono_ || triggerOn_ == 1);
     }
     p.pfsFile      = mono ? monoPfs_ : rgbPfs_;
     computeAoiCrop(p, mono);   // hardware AOI crop (mono always / colour if enabled)

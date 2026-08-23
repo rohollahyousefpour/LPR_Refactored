@@ -90,6 +90,7 @@ private:
     std::string gate_;
     int  cameraId_ = 0;
     int  triggerOn_ = 0;
+    int  rgbFreeRun_ = 0;   // 1 => pair RGB free-runs instead of being the mono master's slave
     int  maxExposure_ = 15000;
     int  minGain_ = 5, maxGain_ = 25;
     bool autoExposure_ = true;
