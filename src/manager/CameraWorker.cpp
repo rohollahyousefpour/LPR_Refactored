@@ -1,6 +1,7 @@
 #include "lpr/manager/CameraWorker.h"
 #include "lpr/Log.h"
 
+#include <nlohmann/json.hpp>
 #include <opencv2/imgproc.hpp>
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,24 @@ void CameraWorker::setRoi(const cv::Rect& roi) {
 }
 
 void CameraWorker::handleCommand(const std::string& key, const std::string& value) {
+    // Live detection-source switch (mono ↔ colour) — handled HERE (the manager layer), not by the
+    // Basler device, so it flips per-frame without a reconnect and the mono keeps capturing.
+    if (key == "Detect On Color" || key == "detect_on_color") {
+        bool on = false;
+        try {
+            auto j = nlohmann::json::parse(value);
+            if (j.contains("value")) {
+                const auto& v = j["value"];
+                on = v.is_boolean() ? v.get<bool>()
+                   : v.is_number()  ? (v.get<double>() != 0.0)
+                   : v.is_string()  ? (v == "1" || v == "true" || v == "on")
+                                    : false;
+            }
+        } catch (...) {}
+        cfg_.detectOnColor = on;
+        LOGI() << "CameraWorker[" << gate_ << "]: detect-on-color = " << (on ? 1 : 0) << " (live)";
+        return;
+    }
     std::lock_guard<std::mutex> lk(sourceMtx_);
     if (source_) source_->handleCommand(key, value);
 }
@@ -166,6 +185,9 @@ void CameraWorker::onFrame(const cv::Mat& frame, const cv::Mat& mono, long times
         detectImg   = !frame.empty() ? frame : mono;
         evidenceImg = !mono.empty()  ? mono  : frame;
     }
+    // Operator switch: run detection on the COLOUR (evidence) stream instead of the mono, while the
+    // colour stays the evidence and the mono keeps capturing (synced pair's master). No reconnect.
+    if (cfg_.detectOnColor && !evidenceImg.empty()) detectImg = evidenceImg;
     if (detectImg.empty()) return;                 // nothing usable this tick
 
     ++framesThisSession_;

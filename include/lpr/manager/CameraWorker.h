@@ -30,6 +30,11 @@ struct MotionConfig {
     // CameraAddress=RGB(evidence) and MonoCameraAddress=mono(detection). Basler leaves this
     // false (its facade already delivers the pair mono-first).
     bool     detectOnSecondary = false;
+    // Run plate DETECTION on the COLOUR (evidence) stream of a mono+colour pair instead of the
+    // mono/IR — for when the mono plate is poorer than the colour. The colour still serves as the
+    // evidence image, and the mono keeps capturing (it is the synced pair's master/strobe) but no
+    // longer feeds detection. Live-switchable without a reconnect. Only meaningful for a pair.
+    bool     detectOnColor = false;
 };
 
 class CameraWorker {
@@ -68,6 +73,10 @@ public:
         cfg_.minChangedPixels = minChangedPixels;
         cfg_.delayMs          = delayMs;
     }
+
+    // Live-switch the detection source between the mono/IR and the colour stream of a pair, without
+    // a reconnect (the flag is a POD read on the capture thread, like the motion tuning above).
+    void setDetectOnColor(bool on) { cfg_.detectOnColor = on; }
 
     // Forward a runtime command to the live source (thread-safe).
     void handleCommand(const std::string& key, const std::string& value);

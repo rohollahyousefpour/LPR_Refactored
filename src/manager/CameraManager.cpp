@@ -125,6 +125,9 @@ void CameraManager::buildFromSettings(MotionConfig defaults) {
             const bool hasMono  = !p.monoAddress.empty() && p.monoAddress != "-1";
             const bool isBasler = (p.typeOfLink == "pylon");
             cfg.detectOnSecondary = hasMono && !isBasler;
+            // Operator switch: detect on the colour stream of a Basler mono+colour pair.
+            cfg.detectOnColor = isBasler && hasMono &&
+                s.getCameraSettingByIdAndKey<int>(id, "detect_on_rgb").value_or(0) == 1;
         }
         // Note: detection-stage ROI/mask (getGeneralRoi/cropAndMask) is applied by
         // RoiCropRecognizer in the detection pipeline, not by the motion gate here.
@@ -147,6 +150,8 @@ void CameraManager::reapplyCameraSettings() {
         const int    objSz  = s.getCameraSettingByIdAndKey<int>(id, "ObjectSize").value_or(def.minChangedPixels);
         const int    delay  = s.getCameraSettingByIdAndKey<int>(id, "CameraDelayTime").value_or(def.delayMs);
         w->setMotionTuning(minDev, maxDev, objSz, delay);
+        // Live-switch the detection source (mono ↔ colour) without a reconnect.
+        w->setDetectOnColor(s.getCameraSettingByIdAndKey<int>(id, "detect_on_rgb").value_or(0) == 1);
         // Structural/hardware camera settings (Basler exposure/GigE/AOI/trigger): the source
         // reconnects only the cameras whose connect-time settings actually changed. No-op for
         // video/rtsp sources and when nothing hardware-relevant changed.
