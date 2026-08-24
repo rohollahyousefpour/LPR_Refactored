@@ -16,6 +16,7 @@
 #include "lpr/net/NatsTransport.h"
 #endif
 #include "lpr/net/SystemResourceMonitor.h"
+#include "lpr/net/ModuleDiag.h"
 
 namespace lpr {
 
@@ -721,6 +722,10 @@ void Application::bootstrapFromJson(const json& settingsBody) {
     worker_->setPlateProcessor(processor_->asProcessor());
     // Publish notable direction FLIPS as module-diag events (best-effort).
     worker_->setDiagSink([this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); });
+    // Same channel for deep camera-fault diagnostics (grab timeout / device error /
+    // open-conflict / jumbo fallback): the capture layers call lpr::diag::cameraFault,
+    // which the backend ingests into «لاگ‌های تردد/دوربین» + the camera-health view.
+    lpr::diag::setSink([this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); });
     worker_->setPlateSink(sender_->asSink());
     worker_->addFrameObserver([this](const FrameItem& f) {
         // While recording, burn the PC date/time + latest plate boxes into the recorded frame

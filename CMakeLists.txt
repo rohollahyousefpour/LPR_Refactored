@@ -55,6 +55,14 @@ target_include_directories(lpr_core PUBLIC include)
 
 # ---- logging (dependency-free, replaces Boost.Log AppLogger) ----
 add_library(lpr_log STATIC src/log/Log.cpp)
+
+# Tiny process-global diagnostic forwarder (camera faults -> messages.module_diag).
+# Depends on nothing but nlohmann_json so it can be linked by any layer without a
+# dependency cycle. lpr_json is an INTERFACE target defined later in this file;
+# referencing it here is fine (same-directory forward reference, as lpr_basler does).
+add_library(lpr_diag STATIC src/net/ModuleDiag.cpp)
+target_include_directories(lpr_diag PUBLIC include)
+target_link_libraries(lpr_diag PUBLIC lpr_json)
 target_link_libraries(lpr_log PUBLIC lpr_util)
 
 option(WITH_VLC "VLC RTSP backend (auto-skips if libvlc missing)" ON)
@@ -187,7 +195,7 @@ if(OpenCV_FOUND)
     target_include_directories(lpr_basler PUBLIC
       include ${CMAKE_CURRENT_SOURCE_DIR}/include/lpr/basler ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(lpr_basler PUBLIC
-      lpr_capture lpr_log lpr_config lpr_json pylon::pylon ${OpenCV_LIBS})
+      lpr_capture lpr_log lpr_config lpr_json lpr_diag pylon::pylon ${OpenCV_LIBS})
     target_compile_definitions(lpr_basler PUBLIC LPR_WITH_PYLON)
     message(STATUS "  + Basler full facade (lpr_basler)")
   endif()
@@ -378,7 +386,7 @@ if(OpenCV_FOUND)
   target_include_directories(lpr_app PUBLIC include ${OpenCV_INCLUDE_DIRS})
   target_link_libraries(lpr_app PUBLIC
     lpr_manager lpr_track lpr_process lpr_services lpr_net lpr_detect
-    lpr_capture lpr_config lpr_core lpr_json ${OpenCV_LIBS})
+    lpr_capture lpr_config lpr_core lpr_json lpr_diag ${OpenCV_LIBS})
   if(WITH_NATS AND NATS_INC)
     target_compile_definitions(lpr_app PUBLIC LPR_WITH_NATS)
   endif()

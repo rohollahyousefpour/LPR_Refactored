@@ -3,6 +3,7 @@
 #include "SettingsManager_.h"
 #include "sunset.h"
 #include "AppLogger.h"
+#include "lpr/net/ModuleDiag.h"
 
 #include <pylon/PylonIncludes.h>
 #include <pylon/FeaturePersistence.h>
@@ -55,23 +56,40 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
     }
     catch (const Pylon::GenericException& e) {
         AppLogger::LogPylonException(e.GetDescription(), "[supervisor] create -- " + serial);
+        // A create failure is usually "device not found" (offline/cabling) or the
+        // camera being held by another app ("controlled by another application"/
+        // access-denied) -- carry Pylon's own text so the operator sees which.
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "open_conflict",
+            std::string("ایجادِ اتصالِ دوربین ناموفق شد — دوربین یافت نشد یا در اختیارِ برنامهٔ دیگری است: ")
+            + (e.GetDescription() ? e.GetDescription() : ""));
         return false;
     }
     catch (const std::exception& e) {
         AppLogger::LogException(e, "[supervisor] create -- " + serial);
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "open_conflict",
+            std::string("ایجادِ اتصالِ دوربین ناموفق شد: ") + e.what());
         return false;
     }
     catch (...) {
         AppLogger::LogUnknownException("[supervisor] create -- " + serial);
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "open_conflict",
+            "ایجادِ اتصالِ دوربین با خطای ناشناخته ناموفق شد");
         return false;
     }
-    if (!dev) { LOGW() << "[supervisor] device not found: " << serial; return false; }
+    if (!dev) {
+        LOGW() << "[supervisor] device not found: " << serial;
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "not_found",
+            "دوربین یافت نشد (آفلاین یا سریالِ نادرست)");
+        return false;
+    }
 
     // From here a CameraDevice owns 'dev' (Cleanup_Delete); on any failure its
     // destructor releases it -- no manual cleanup needed.
     auto device = std::make_unique<CameraDevice>(dev, serial);
     if (!device->open()) {
         LOGE() << "[supervisor] open failed: " << serial;
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "open_failed",
+            "باز کردنِ دوربین ناموفق شد (دستگاه پاسخ نداد یا در اختیارِ برنامهٔ دیگری است)");
         return false;   // device dtor releases
     }
 
@@ -174,18 +192,29 @@ bool ConnectionSupervisor::openConfigureStore(const std::string& serial) {
         { std::lock_guard<std::mutex> lk(reconMutex_); connectedAt_[serial] = std::chrono::steady_clock::now(); }
 
         LOGI() << "[supervisor] connected " << serial;
+        // Positive notice so a recovery is visible in the log / health dashboard,
+        // not just the preceding failures.
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "INFO", "reconnected",
+            "دوربین متصل شد");
         return true;
     }
     catch (const cv::Exception& e) {
         AppLogger::LogCvException(e, "[supervisor] configure -- " + serial);
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "configure_failed",
+            std::string("پیکربندیِ دوربین پس از اتصال ناموفق شد: ") + e.what());
         return false;
     }
     catch (const Pylon::GenericException& e) {
         AppLogger::LogPylonException(e.GetDescription(), "[supervisor] configure -- " + serial);
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "configure_failed",
+            std::string("پیکربندیِ دوربین پس از اتصال ناموفق شد: ")
+            + (e.GetDescription() ? e.GetDescription() : ""));
         return false;   // device (still local unique_ptr) releases on scope exit
     }
     catch (const std::exception& e) {
         AppLogger::LogException(e, "[supervisor] configure -- " + serial);
+        lpr::diag::cameraFault(ctx_.cameraId, serial, "ERROR", "configure_failed",
+            std::string("پیکربندیِ دوربین پس از اتصال ناموفق شد: ") + e.what());
         return false;
     }
     catch (...) {
@@ -523,9 +552,14 @@ void ConnectionSupervisor::applyBandwidth(CameraDevice& dev, const Profile& prof
         { std::lock_guard<std::mutex> lk(reconMutex_);
           auto ov = packetOverride_.find(serial);
           if (ov != packetOverride_.end() && ov->second > 0) {
-              if (ov->second != wantPkt)
+              if (ov->second != wantPkt) {
                   LOGW() << "[supervisor][bw][" << serial << "] using per-camera packet override "
                          << ov->second << " (global " << wantPkt << ") -- jumbo auto-fallback";
+                  lpr::diag::cameraFault(ctx_.cameraId, serial, "WARNING", "jumbo_fallback",
+                      "بازگشتِ خودکار به بستهٔ " + std::to_string(ov->second)
+                      + " بایت (شبکه jumbo=" + std::to_string(wantPkt)
+                      + " را پاس نمی‌دهد) — برای این دوربین MTU/سوییچ را بررسی کنید");
+              }
               wantPkt = ov->second;
           } }
         if (c->GevSCPSPacketSize.IsWritable()) {

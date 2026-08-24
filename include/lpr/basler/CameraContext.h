@@ -48,6 +48,11 @@ struct CameraContext {
     int  grabTimeoutMs = 1000; // MUST exceed a triggered slave's frame period
     int  expectedCount = 1;  // 1 = lone camera, 2 = RGB+Mono pair
 
+    // DB camera id (== module gate). Set by the facade at construction; used to
+    // correlate camera-fault diagnostics (lpr::diag::cameraFault) to this camera
+    // in the backend log store / health dashboard. Empty until set.
+    std::string cameraId;
+
     IFrameSink* sink = nullptr;  // non-owning; set by the facade after build
 
     // Non-owning; set by the facade to the supervisor. Lets manual commands

@@ -49,6 +49,10 @@ BaslerCamera::BaslerCamera(int x, int y, int w, int h, std::string gate)
 {
     Pylon::PylonInitialize();
 
+    // Let deep layers tag camera-fault diagnostics with this camera's id so they
+    // land under the right camera in the backend log store / health dashboard.
+    ctx_.cameraId = gate_;
+
     // Settings reads can throw (missing config / bad type). Fall back to the
     // member defaults rather than failing construction.
     try {

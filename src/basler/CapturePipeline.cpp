@@ -2,6 +2,7 @@
 #include "AppLogger.h"
 #include "SettingsManager_.h"
 #include "lpr/basler/GigeRateAdapt.h"
+#include "lpr/net/ModuleDiag.h"
 #include <opencv2/core.hpp>
 
 using lpr::GigeAdaptCfg;
@@ -144,6 +145,14 @@ void CapturePipeline::run() {
                     if (deviceError || fails >= kFailThreshold) {
                         LOGW() << "[capture][" << t.serial << "] grab failed (status="
                                << static_cast<int>(status) << ", fails=" << fails << ") -> fault";
+                        // Surface the real reason to the backend log / health dashboard.
+                        const char* why =
+                            status == CameraDevice::GrabStatus::Timeout    ? "پایانِ زمانِ دریافتِ فریم (Timeout) — دوربین در بازهٔ مجاز فریم نداد؛ تریگر/کابل/پهنای‌باند را بررسی کنید"
+                          : status == CameraDevice::GrabStatus::BadFrame   ? "فریمِ ناقص/خراب — احتمالِ پهنای‌باند یا اندازهٔ بستهٔ jumbo (packet size)"
+                          : status == CameraDevice::GrabStatus::DeviceError ? "خطای دستگاه هنگامِ دریافتِ فریم — دوربین قطع/بازنشانی شد"
+                          :                                                   "دریافتِ فریم ناموفق شد";
+                        lpr::diag::cameraFault(ctx_.cameraId, t.serial, "ERROR", "grab_fault",
+                            std::string(why) + " (پیاپی=" + std::to_string(fails) + ")");
                         consecutiveFails.erase(t.serial);
                         if (onFault_) onFault_(t.serial);   // removes + schedules reconnect
                     } else {
