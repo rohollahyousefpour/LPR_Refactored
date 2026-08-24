@@ -6,6 +6,7 @@
 #include <glib.h>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 
@@ -27,6 +28,10 @@ public:
     void stop() override;
     bool isLive() const override;
 
+    // Report effective fps + read-error count so an RTSP camera surfaces in the
+    // health dashboard's Grab test the same way a Basler camera does.
+    bool readAppliedDiag(const std::string& serial, Diag& out) override;
+
 private:
     bool buildPipeline();
     static void        onPadAdded(GstElement* src, GstPad* pad, gpointer user);
@@ -43,6 +48,13 @@ private:
     std::mutex        frameMtx_;
     std::atomic<bool> terminate_{false};
     std::atomic<bool> errorOccurred_{false};
+
+    // Health telemetry (published to the manual-live diag + module_diag faults).
+    std::atomic<double> measuredFps_{-1.0};   // rolling effective frame rate
+    std::atomic<long>   readErrors_{0};       // pipeline errors/EOS this process
+    std::atomic<bool>   sawFrame_{false};     // first-frame => emit an INFO "connected"
+    int                 fpsFrames_ = 0;                     // gst thread only
+    std::chrono::steady_clock::time_point fpsWinStart_;     // gst thread only
 };
 
 } // namespace lpr

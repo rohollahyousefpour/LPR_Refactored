@@ -82,7 +82,7 @@ if(OpenCV_FOUND)
                    src/capture/DualCaptureSource.cpp
                    src/capture/VideoFileCaptureSource.cpp)
   set(LPR_CAP_DEFS "")
-  set(LPR_CAP_LIBS lpr_util lpr_log ${OpenCV_LIBS})
+  set(LPR_CAP_LIBS lpr_util lpr_log lpr_diag ${OpenCV_LIBS})
   set(LPR_CAP_INCS include ${OpenCV_INCLUDE_DIRS})
 
   find_package(PkgConfig QUIET)

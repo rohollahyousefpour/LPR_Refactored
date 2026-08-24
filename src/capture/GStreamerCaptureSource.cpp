@@ -1,6 +1,7 @@
 #include "lpr/capture/GStreamerCaptureSource.h"
 #include "lpr/Log.h"
 #include "lpr/util/Time.h"
+#include "lpr/net/ModuleDiag.h"
 
 #include <opencv2/opencv.hpp>
 #include <chrono>
@@ -100,6 +101,10 @@ void GStreamerCaptureSource::run() {
     // own reconnect (uniform with the VLC/video sources).
     terminate_     = false;
     errorOccurred_ = false;
+    sawFrame_      = false;
+    measuredFps_   = -1.0;
+    fpsFrames_     = 0;
+    fpsWinStart_   = std::chrono::steady_clock::now();
 
     GMainContext* ctx = g_main_context_new();
     g_main_context_push_thread_default(ctx);
@@ -107,6 +112,8 @@ void GStreamerCaptureSource::run() {
     if (!buildPipeline()) {
         g_main_context_pop_thread_default(ctx);
         g_main_context_unref(ctx);
+        lpr::diag::cameraFault(cameraId_, uri_, "ERROR", "stream_open_failed",
+            "ساختِ پایپ‌لاینِ GStreamer برای دوربینِ RTSP ناموفق شد — آدرس/کدک را بررسی کنید");
         emitError();
         return;
     }
@@ -297,6 +304,20 @@ void GStreamerCaptureSource::handleSample(GstSample* sample) {
             emitFrame(frame.clone(), cv::Mat(), nowEpochSeconds());
         }
         gst_buffer_unmap(buffer, &map);
+
+        // First frame of the session => the stream is genuinely delivering. Surface
+        // a positive notice so a recovery is visible, not just the preceding errors.
+        if (!sawFrame_.exchange(true)) {
+            lpr::diag::cameraFault(cameraId_, uri_, "INFO", "stream_connected",
+                "استریمِ دوربینِ RTSP برقرار شد و فریم می‌دهد");
+        }
+        // Rolling fps over a ~15-frame window (this callback is single-threaded).
+        if (++fpsFrames_ >= 15) {
+            const auto now = std::chrono::steady_clock::now();
+            const double secs = std::chrono::duration<double>(now - fpsWinStart_).count();
+            if (secs > 0) measuredFps_ = fpsFrames_ / secs;
+            fpsWinStart_ = now; fpsFrames_ = 0;
+        }
     }
 }
 
@@ -306,7 +327,12 @@ gboolean GStreamerCaptureSource::onBusMessage(GstBus* /*bus*/, GstMessage* msg, 
         case GST_MESSAGE_ERROR: {
             GError* err = nullptr; gchar* dbg = nullptr;
             gst_message_parse_error(msg, &err, &dbg);
-            LOGE() << "GStreamer error (" << self->uri_ << "): " << (err ? err->message : "unknown");
+            const std::string reason = err && err->message ? err->message : "unknown";
+            LOGE() << "GStreamer error (" << self->uri_ << "): " << reason;
+            ++self->readErrors_;
+            self->measuredFps_ = -1.0;
+            lpr::diag::cameraFault(self->cameraId_, self->uri_, "ERROR", "stream_lost",
+                "خطای استریمِ دوربینِ RTSP: " + reason + " — تلاش برای اتصالِ مجدد");
             if (err) g_error_free(err);
             g_free(dbg);
             self->errorOccurred_ = true;
@@ -315,12 +341,24 @@ gboolean GStreamerCaptureSource::onBusMessage(GstBus* /*bus*/, GstMessage* msg, 
         }
         case GST_MESSAGE_EOS:
             LOGI() << "GStreamer: EOS for " << self->uri_;
+            ++self->readErrors_;
+            self->measuredFps_ = -1.0;
+            lpr::diag::cameraFault(self->cameraId_, self->uri_, "WARNING", "stream_lost",
+                "پایانِ جریانِ دوربینِ RTSP (EOS) — تلاش برای اتصالِ مجدد");
             self->errorOccurred_ = true;
             if (self->mainLoop_) g_main_loop_quit(self->mainLoop_);
             break;
         default: break;
     }
     return TRUE;
+}
+
+bool GStreamerCaptureSource::readAppliedDiag(const std::string& /*serial*/, Diag& out) {
+    if (!sawFrame_.load()) return false;   // nothing meaningful until frames flow
+    out.fps = measuredFps_.load();                 // effective frame rate
+    out.incompleteFrames = readErrors_.load();     // stream errors/EOS this process
+    out.model = "IP / RTSP (GStreamer)";           // shown as the device "model" tile
+    return true;
 }
 
 } // namespace lpr

@@ -54,6 +54,7 @@ std::unique_ptr<CaptureSource> CameraSourceFactory::create(const CameraSourcePar
 
     auto main = makeBare();
     main->setAddress(p.address, p.delayMs);
+    main->setCameraId(p.gate);   // so generic sources can attribute faults to this camera
 
     // Dual mono+RGB.
     if (!p.monoAddress.empty() && p.monoAddress != "-1") {
@@ -65,6 +66,7 @@ std::unique_ptr<CaptureSource> CameraSourceFactory::create(const CameraSourcePar
         }
         auto mono = makeBare();
         mono->setAddress(p.monoAddress, p.delayMs);
+        mono->setCameraId(p.gate);
         return std::make_unique<DualCaptureSource>(std::move(main), std::move(mono));
     }
     return main;

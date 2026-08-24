@@ -78,12 +78,19 @@ public:
     // Default: unsupported (false); Basler overrides. `out` is set only on true.
     virtual bool readAppliedPreset(const std::string& /*serial*/, std::string& /*out*/) { return false; }
 
+    // The DB camera id (== module gate), tagged by the source factory. Lets a
+    // source forward a fault to messages.module_diag (lpr::diag::cameraFault)
+    // under the right camera — the Basler facade uses its own CameraContext, but
+    // the generic OpenCV/IP sources have no other handle on their identity.
+    void setCameraId(std::string id) { cameraId_ = std::move(id); }
+
 protected:
     void emitFrame(const cv::Mat& f, const cv::Mat& m, long t) { if (frameCb_) frameCb_(f, m, t); }
     void emitError() { if (errorCb_) errorCb_(); }
 
     FrameCallback frameCb_;
     ErrorCallback errorCb_;
+    std::string   cameraId_;   // set by the factory; empty for anonymous sources
 };
 
 } // namespace lpr
