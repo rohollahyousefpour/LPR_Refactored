@@ -53,16 +53,20 @@ int main() {
     auto a3 = proc2.process(mk("11B22238", 0.95f, -1));   // clustered (Jaro>=0.9), w=0.95 < 1.2
     LPR_CHECK(!a3.has_value());                           // consensus unchanged -> no re-emit
 
-    // --- Tracked path: the vehicle tracker has already confirmed the track over >=2 frames,
-    // so the first confident read emits immediately and ONCE per track. Later frames of the same
-    // vehicle (with OCR digit-wobble) are suppressed. Mirrors the original is_read_plate gate. ---
+    // --- Tracked path: first read emits immediately (a short pass is never dropped),
+    // and the pass RE-EMITS whenever the accuracy-weighted consensus later CHANGES — so a
+    // wrong early read is corrected to the majority plate. The backend correlates by
+    // track_id and updates the SAME row in place, so a changed re-send is a correction,
+    // not a duplicate. ---
     PlateProcessor proct(cfg);
-    auto t1 = proct.process(mk("47Q27000", 0.95f, 7));    // tracked -> emit on first read
-    LPR_CHECK(t1.has_value() && t1->trackId == 7);
-    auto t2 = proct.process(mk("34Q27000", 0.95f, 7));    // same track, OCR wobble -> suppressed
-    LPR_CHECK(!t2.has_value());
-    auto t3 = proct.process(mk("88Q27000", 0.95f, 9));    // a DIFFERENT vehicle -> emits once
-    LPR_CHECK(t3.has_value() && t3->trackId == 9);
+    auto t1 = proct.process(mk("34Q27000", 0.60f, 7));    // early (wrong) read -> emit immediately
+    LPR_CHECK(t1.has_value() && t1->trackId == 7 && t1->text == "34Q27000");
+    auto t2 = proct.process(mk("47Q27000", 0.95f, 7));    // stronger correct read flips the vote -> RE-EMIT (correction)
+    LPR_CHECK(t2.has_value() && t2->text == "47Q27000");
+    auto t3 = proct.process(mk("47Q27000", 0.90f, 7));    // consensus unchanged -> suppressed
+    LPR_CHECK(!t3.has_value());
+    auto t4 = proct.process(mk("88Q27000", 0.95f, 9));    // a DIFFERENT vehicle -> emits once
+    LPR_CHECK(t4.has_value() && t4->trackId == 9);
 
     // Permissive validator accepts anything non-empty; minVotes=1 emits immediately.
     PlateProcessorConfig open; open.validator = nullptr; open.minVotes = 1;

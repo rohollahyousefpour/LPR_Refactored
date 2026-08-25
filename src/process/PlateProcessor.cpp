@@ -129,10 +129,15 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     const int needed = tracked ? 1 : cfg_.minVotes;
     if (static_cast<int>(tr.reads.size()) < needed) return std::nullopt;
 
-    // Send the pass EXACTLY ONCE. We deliberately do NOT re-send when the running consensus shifts
-    // (that produced duplicate near-identical variants of one car). A returning plate re-sends only
-    // by starting a NEW pass after passGapMs, handled in resolveKey.
-    if (tr.sent) return std::nullopt;
+    // Emit on first qualification. For a TRACKED pass, ALSO re-emit whenever the
+    // weighted consensus later CHANGES: as more frames vote, a wrong early read is
+    // corrected to the majority plate. The backend correlates by track_id and
+    // updates the SAME passage row in place (within its correction window), so a
+    // changed re-send corrects the record instead of duplicating it — and the
+    // first frame is still emitted immediately, so a short pass is never dropped.
+    // Untracked (plate-only) passes have no track_id to correlate on, so they
+    // still emit EXACTLY ONCE to avoid duplicate near-identical rows.
+    if (tr.sent && (!tracked || tr.consensus == tr.lastSent)) return std::nullopt;
 
     tr.sent = true;
     tr.lastSent = tr.consensus;
