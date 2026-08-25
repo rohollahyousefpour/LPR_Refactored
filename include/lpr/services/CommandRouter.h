@@ -30,7 +30,8 @@ public:
 
     CommandRouter(RecordingService& recording, LiveViewService& live);
 
-    void liveView(const json& msg);          // enable live view for a camera (clamped duration)
+    void liveView(const json& msg);          // enable live view for a camera (clamped duration; 0 = until stopped)
+    void stopLiveView(const std::string& cameraId);   // stop live view (last viewer left)
     void startRecording(const json& msg);    // begin recording a camera for a duration
     void stopRecording(const std::string& cameraId);
     void getSetting(const json& msg);         // -> injected handler (app bootstrap)

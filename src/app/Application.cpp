@@ -128,6 +128,18 @@ void Application::onCommand(const std::string& payload) {
         if (router_) {
             if      (ct == "recording")  { LOGI() << "Application: -> startRecording"; router_->startRecording(cmd); }
             else if (ct == "streaming")  { LOGI() << "Application: -> liveView";       router_->liveView(cmd); }
+            else if (ct == "stop_streaming" || ct == "stop_live") {
+                // Backend sends this when the last socket viewer of a camera leaves,
+                // so we stop the physical stream instead of running to the deadline.
+                const json* idN = findAnyKeyDeep(cmd, {"camera_id", "cameraId", "gate_id", "gate", "id"});
+                if (idN) {
+                    const std::string cid = idN->is_string() ? idN->get<std::string>() : idN->dump();
+                    LOGI() << "Application: -> stopLiveView id=" << cid;
+                    router_->stopLiveView(cid);
+                } else {
+                    LOGW() << "Application: stop_streaming command needs camera_id";
+                }
+            }
             else if (ct == "set_config") { LOGI() << "Application: -> setCameraConfig"; router_->setCameraConfig(cmd); }
             else if (ct == "lpr_settings") { LOGI() << "Application: -> requestSettings"; requestSettings(); }
             else if (ct == "reset_lpr" || ct == "restart" || ct == "reset") {

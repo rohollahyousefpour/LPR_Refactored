@@ -100,6 +100,13 @@ int main() {
     router.liveView(camMsg("5", 30));
     LPR_CHECK(live3.isLive("5"));
 
+    // unbounded live (duration 0 = until stopped) + explicit stop from the backend
+    // when the last viewer leaves (viewer refcount lives in the backend).
+    router.liveView(camMsg("6", 0));
+    LPR_CHECK(live3.isLive("6"));
+    router.stopLiveView("6");
+    LPR_CHECK(!live3.isLive("6"));
+
     router.startRecording(camMsg("5", 0));
     LPR_CHECK(rec2.isRecording("5"));
     router.stopRecording("5");
@@ -117,6 +124,8 @@ int main() {
     // any long duration the operator picks is honoured now (ceiling raised to 24h);
     // a 2-hour request passes through instead of being truncated to the old 20-min cap.
     LPR_CHECK(CommandRouter::durationOf(camMsg("5", 7200), 2, 2, 86400) == 7200);
+    // with a 0 floor, an explicit 0 passes through as "unbounded" (liveView uses this)
+    LPR_CHECK(CommandRouter::durationOf(camMsg("5", 0), 2, 0, 86400) == 0);
     LPR_CHECK(CommandRouter::cameraIdOf(camMsg("42", 5)) == "42");
 
     // ---- RecordingService watchdog: a timed recording closes even if frames stop ----
