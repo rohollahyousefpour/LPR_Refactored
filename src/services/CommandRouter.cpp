@@ -38,7 +38,13 @@ int CommandRouter::durationOf(const json& msg, int defValue, int lo, int hi) {
 void CommandRouter::liveView(const json& msg) {
     const std::string id = cameraIdOf(msg);
     if (id.empty()) return;
-    const int duration = durationOf(msg, /*def*/2, /*lo*/2, /*hi*/1200);   // original clamp
+    // Honour whatever duration the operator asked for (presets or the custom
+    // h:m:s picker in the UI). Clamped to [2s, 24h] — the old 1200s (20 min)
+    // ceiling silently truncated longer live sessions. 0/negative would mean
+    // "until disabled", but the streaming command always carries a positive
+    // duration, so the floor of 2s keeps a stray 0 from becoming an unbounded
+    // stream with no viewer-driven stop.
+    const int duration = durationOf(msg, /*def*/2, /*lo*/2, /*hi*/86400);
     live_.enableLive(id, duration);
 }
 

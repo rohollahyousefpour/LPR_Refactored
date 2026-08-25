@@ -52,6 +52,20 @@ int main() {
     LPR_CHECK(sent2 == 1);
     LPR_CHECK(!live2.isLive("9"));
 
+    // keep-longest (concurrent viewers): a later SHORTER request must NOT shorten
+    // an already-active stream, and a later LONGER request extends it. Two people
+    // requesting live with different durations => union of deadlines.
+    LiveViewService live4(LiveViewService::Config{1});
+    live4.enableLive("kl", 100);               // viewer A: long window
+    live4.enableLive("kl", 1);                 // viewer B: short — must NOT win
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    LPR_CHECK(live4.isLive("kl"));             // still live thanks to A's 100s
+    // reverse order: short first, then a longer request extends it
+    live4.enableLive("kl2", 1);
+    live4.enableLive("kl2", 100);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    LPR_CHECK(live4.isLive("kl2"));
+
     // ---- RecordingService: state machine + segment-complete callback ----
     RecordingService::Config rc;
     rc.baseDir = "/tmp/lpr_rec_test";
@@ -100,6 +114,9 @@ int main() {
 
     // duration clamping: liveView min is 2s even if asked for 0
     LPR_CHECK(CommandRouter::durationOf(camMsg("5", 0), 2, 2, 1200) == 2);
+    // any long duration the operator picks is honoured now (ceiling raised to 24h);
+    // a 2-hour request passes through instead of being truncated to the old 20-min cap.
+    LPR_CHECK(CommandRouter::durationOf(camMsg("5", 7200), 2, 2, 86400) == 7200);
     LPR_CHECK(CommandRouter::cameraIdOf(camMsg("42", 5)) == "42");
 
     // ---- RecordingService watchdog: a timed recording closes even if frames stop ----

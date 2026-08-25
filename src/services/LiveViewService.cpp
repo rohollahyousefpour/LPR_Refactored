@@ -11,11 +11,34 @@ LiveViewService::LiveViewService(Config cfg) : cfg_(cfg) {
 
 void LiveViewService::enableLive(const std::string& gate, int durationSeconds) {
     std::lock_guard<std::mutex> lk(mtx_);
-    Live& l = live_[gate];
-    l.hasExpiry = durationSeconds > 0;
-    if (l.hasExpiry)
-        l.expireAt = std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
-    LOGI() << "LiveViewService[" << gate << "]: live for " << durationSeconds << "s";
+    // Multiple operators can watch the SAME camera at once — the backend fans one
+    // physical stream out to every subscriber. Each subscribe re-issues the
+    // streaming command with THAT viewer's duration, so we must keep the LONGEST
+    // deadline (a union of viewers), never blindly overwrite it. Otherwise a
+    // second viewer asking for a shorter time would cut the first viewer's stream
+    // off early. `durationSeconds <= 0` means "until disabled" (unbounded), which
+    // always wins over any finite request.
+    const auto newExpiry =
+        std::chrono::steady_clock::now() + std::chrono::seconds(durationSeconds);
+    auto it = live_.find(gate);
+    if (it == live_.end()) {
+        Live l;
+        l.hasExpiry = durationSeconds > 0;
+        if (l.hasExpiry) l.expireAt = newExpiry;
+        live_.emplace(gate, l);
+        LOGI() << "LiveViewService[" << gate << "]: live for " << durationSeconds << "s";
+        return;
+    }
+    Live& l = it->second;
+    if (durationSeconds <= 0) {
+        l.hasExpiry = false;                       // unbounded wins
+    } else if (l.hasExpiry && newExpiry > l.expireAt) {
+        l.expireAt = newExpiry;                     // extend to the later deadline
+    }
+    // else: existing deadline is already later, or already unbounded → keep it.
+    LOGI() << "LiveViewService[" << gate << "]: live +"
+           << durationSeconds << "s (keep-longest, "
+           << (l.hasExpiry ? "bounded" : "until-disabled") << ")";
 }
 
 void LiveViewService::disableLive(const std::string& gate) {
