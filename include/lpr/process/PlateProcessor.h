@@ -93,6 +93,10 @@ private:
         long        lastUpdateMs = 0;
         PlateResult best;            // LARGEST (closest) plate sample — its crop is stored
         double      bestSize = 0.0;  // area of `best`'s plate box, for the largest-plate pick
+        std::string passId;          // stable per-pass UUID: lets the backend correlate the first
+                                     // emit and every later consensus re-send to the SAME row,
+                                     // even for UNTRACKED plates (no ByteTrack id) — so refining
+                                     // the vote updates the passage instead of duplicating it.
     };
 
     std::string resolveKey(const PlateResult& p, long nowMs);

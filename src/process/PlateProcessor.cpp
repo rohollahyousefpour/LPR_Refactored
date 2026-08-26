@@ -1,5 +1,6 @@
 #include "lpr/process/PlateProcessor.h"
 #include "lpr/util/JaroWinkler.h"
+#include "lpr/util/Uuid.h"
 #include "lpr/Log.h"
 
 #include <nlohmann/json.hpp>
@@ -122,12 +123,13 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     // Keep the LARGEST-plate sample as `best` — its crop (highest resolution) is what
     // gets stored/sent, and it is the text fallback when the vote is empty.
     if (tr.reads.size() == 1 || sz > tr.bestSize) { tr.best = plate; tr.bestSize = sz; }
+    if (tr.passId.empty()) tr.passId = generateUuidV4();   // stable id for this pass (first read)
     tr.consensus = weightedConsensus(tr.reads);   // representative text for pass clustering only
 
-    // Emit once a pass has the required evidence. minVotes defaults to 1, so a single-frame car is
-    // NEVER dropped; raise it only if you want to trade capture for robustness.
-    const int needed = tracked ? 1 : cfg_.minVotes;
-    if (static_cast<int>(tr.reads.size()) < needed) return std::nullopt;
+    // Emit on the VERY FIRST frame — a plate seen only once is still sent, never dropped. As
+    // more frames arrive the weighted vote refines and RE-EMITS below (correcting the row in
+    // place via passId), so we get single-frame capture AND multi-frame consensus at once.
+    // (min_votes is no longer a capture gate, so low fps no longer loses fast vehicles.)
 
     // Emit on first qualification. For a TRACKED pass, ALSO re-emit whenever the
     // weighted consensus later CHANGES: as more frames vote, a wrong early read is
@@ -137,7 +139,10 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     // first frame is still emitted immediately, so a short pass is never dropped.
     // Untracked (plate-only) passes have no track_id to correlate on, so they
     // still emit EXACTLY ONCE to avoid duplicate near-identical rows.
-    if (tr.sent && (!tracked || tr.consensus == tr.lastSent)) return std::nullopt;
+    // Already sent and the vote hasn't changed -> nothing new to send. When the consensus
+    // DOES change (a later frame shifts the vote), re-emit so the backend UPDATES the row —
+    // now for untracked passes too, correlated by the stable passId set below.
+    if (tr.sent && tr.consensus == tr.lastSent) return std::nullopt;
 
     tr.sent = true;
     tr.lastSent = tr.consensus;
@@ -150,6 +155,7 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     // character-merged string), keeping the crop consistent with the sent number.
     out.text = tr.consensus.empty() ? tr.best.text : tr.consensus;
     out.trackId = plate.trackId;
+    out.passId = tr.passId;   // stable per-pass id -> backend correlates first emit + re-sends
     out.gate = plate.gate;
     // Trace the vote so a wrong emitted plate is debuggable: the chosen consensus,
     // the single highest-confidence read it may have overridden, and the vote count.
