@@ -15,6 +15,35 @@ long nowMs() {
     using namespace std::chrono;
     return static_cast<long>(duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
 }
+
+// Lowercase the plate's Latin letters — EXCEPT 'D'/'S', which are the diplomatic /
+// service (سیاسی/خدماتی) codes and must stay uppercase so the server treats them as
+// the special Iranian plate letters rather than regular د/س.
+std::string normalizePlateText(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        if (c == 'D' || c == 'S') out.push_back(c);
+        else if (c >= 'A' && c <= 'Z') out.push_back(static_cast<char>(c - 'A' + 'a'));
+        else out.push_back(c);
+    }
+    return out;
+}
+
+// Standard Iranian civilian plate layout: 2 digits, 1 letter, then 5 digits
+// (prefix2 + alpha + mid3 + suffix2), e.g. "12j34567". The letter may be any Latin
+// code a–z or the special uppercase D/S (diplomatic/service) — all Iranian.
+bool isIranianStructure(const std::string& t) {
+    if (t.size() != 8) return false;
+    auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
+    auto isLetter = [](char c) {
+        return (c >= 'a' && c <= 'z') || c == 'D' || c == 'S';
+    };
+    if (!isDigit(t[0]) || !isDigit(t[1]) || !isLetter(t[2])) return false;
+    for (size_t i = 3; i < 8; ++i)
+        if (!isDigit(t[i])) return false;
+    return true;
+}
 } // namespace
 
 PlateSender::PlateSender(IMessageTransport& transport, Config cfg)
@@ -62,18 +91,25 @@ std::string PlateSender::buildMessage(const PlateItem& item) const {
     cv::Rect box = p.box.boundingRect();
     if (p.vehicleBox.area() > 0) box = p.vehicleBox;
 
+    // Normalize the OCR text (lowercase, D/S preserved) and, when it matches the
+    // Iranian plate structure, label the nationality "IR" so the server canonicalizes
+    // the letter to Persian and splits the parts (otherwise it stored the raw Latin
+    // form and the plate was unsearchable/unfilterable).
+    const std::string plateText = normalizePlateText(p.text);
+    const bool iranian = isIranianStructure(plateText);
+
     json vehicle = {
         {"box", {{"left", box.x}, {"top", box.y},
                  {"right", box.x + box.width}, {"bottom", box.y + box.height}}},
         {"direction", p.direction},
         {"plate", {
-            {"plate", p.text},
-            {"nation", nullptr},
+            {"plate", plateText},
+            {"nation", iranian ? json("IR") : json(nullptr)},
             {"prefix_2", nullptr},
             {"alpha", nullptr},
             {"mid_3", nullptr},
             {"suffix_2", nullptr},
-            {"is_valid", cfg_.validator ? cfg_.validator(p.text) : true},
+            {"is_valid", cfg_.validator ? cfg_.validator(plateText) : true},
             {"city_code", 0},
             // Prefer the per-pass UUID (stable across the early + correction events);
             // fall back to the numeric tracking id when no passId was set.
