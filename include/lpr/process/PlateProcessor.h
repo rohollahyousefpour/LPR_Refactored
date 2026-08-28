@@ -45,6 +45,12 @@ struct PlateProcessorConfig {
     // misreads a Jaro threshold rejects, WITHOUT merging a different letter or a
     // clearly different number. 0 disables the rule (Jaro-only clustering).
     int    maxPlateCharDiffs   = 2;
+
+    // Below this many reads, a pass EMITS its best (largest, highest-resolution)
+    // single read rather than the summed-weight consensus — so a transient 2-frame
+    // misread can't briefly override a clear high-confidence read and be sent first.
+    // Once the vote reaches this many frames, the weighted consensus is trusted.
+    int    minConsensusVotes   = 3;
     // Optional: publish a diagnostic JSON (to messages.module_diag) when the
     // accuracy-weighted consensus OVERRODE the single highest-confidence read —
     // the notable "the vote saved us from a misread" case. Best-effort.
@@ -80,6 +86,7 @@ public:
         cfg_.trackTtlMs          = c.trackTtlMs;
         cfg_.passGapMs           = c.passGapMs;
         cfg_.maxPlateCharDiffs   = c.maxPlateCharDiffs;
+        cfg_.minConsensusVotes   = c.minConsensusVotes;
     }
 
 private:

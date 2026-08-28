@@ -115,6 +115,10 @@ std::string PlateSender::buildMessage(const PlateItem& item) const {
             // fall back to the numeric tracking id when no passId was set.
             {"track_id", p.passId.empty() ? json(p.trackId) : json(p.passId)}}},
         {"ocr_accuracy", p.confidence},
+        // Per-pass consensus vote count. The backend keeps the text of the
+        // highest-vote send for a pass, so a later, more-voted correction wins
+        // regardless of the order the persist tasks run in.
+        {"vote_count", p.votes},
         {"vehicle_class", {{"class", nullptr}, {"conf", 0}}},
         {"vehicle_type",  {{"class", nullptr}, {"conf", 0}}},
         {"vision_speed", 0.0},

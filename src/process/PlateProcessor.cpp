@@ -142,18 +142,28 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     // Already sent and the vote hasn't changed -> nothing new to send. When the consensus
     // DOES change (a later frame shifts the vote), re-emit so the backend UPDATES the row —
     // now for untracked passes too, correlated by the stable passId set below.
-    if (tr.sent && tr.consensus == tr.lastSent) return std::nullopt;
+    // Choose the text to SEND. Below minConsensusVotes, trust the BEST (largest,
+    // highest-resolution) single read instead of the summed-weight consensus: with
+    // only 1-2 frames a transient misread can tie/beat the true plate on weight and
+    // be sent first, so we lean on the clearest crop until the vote is deep enough.
+    // From minConsensusVotes on, the weighted consensus (an agreeing majority) wins.
+    const std::string chosen =
+        (static_cast<int>(tr.reads.size()) < cfg_.minConsensusVotes && !tr.best.text.empty())
+            ? tr.best.text
+            : (tr.consensus.empty() ? tr.best.text : tr.consensus);
+
+    // Already sent this exact text and nothing changed -> nothing to send. When the
+    // chosen text CHANGES (the vote settled onto a different plate), re-emit so the
+    // backend updates the SAME row in place — correlated by passId and kept by the
+    // highest vote_count, so a later, more-voted correction always wins.
+    if (tr.sent && chosen == tr.lastSent) return std::nullopt;
 
     tr.sent = true;
-    tr.lastSent = tr.consensus;
+    tr.lastSent = chosen;
 
     PlateResult out = tr.best;        // best-quality sample: image / box / coords / confidence
-    // Send the accuracy-WEIGHTED vote across the pass's reads, not the single
-    // highest-confidence frame — one over-confident misread must not override an agreeing
-    // majority. weightedConsensus sums confidence per DISTINCT full text and returns the
-    // top one, so it is always a text a frame actually produced (never a synthesized/
-    // character-merged string), keeping the crop consistent with the sent number.
-    out.text = tr.consensus.empty() ? tr.best.text : tr.consensus;
+    out.text = chosen;
+    out.votes = static_cast<int>(tr.reads.size());   // vote strength for backend correlation
     out.trackId = plate.trackId;
     out.passId = tr.passId;   // stable per-pass id -> backend correlates first emit + re-sends
     out.gate = plate.gate;

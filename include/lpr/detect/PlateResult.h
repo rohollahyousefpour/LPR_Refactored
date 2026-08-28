@@ -21,6 +21,10 @@ struct PlateResult {
     // no tracking model needed). Sent as `plate.track_id` on the early event AND the
     // later direction-correction so the backend can update the same passage row.
     std::string     passId;
+    // Number of frames that voted for this pass's emitted text. Grows as the pass
+    // accumulates reads; sent to the backend as `vote_count` so it keeps the text
+    // of the highest-vote send for the pass (order-independent correction).
+    int             votes = 0;
 };
 
 } // namespace lpr
