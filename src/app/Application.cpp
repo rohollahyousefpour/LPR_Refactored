@@ -70,7 +70,22 @@ bool Application::start(std::atomic<bool>& running) {
     if (opts_.useNats) {
         if (opts_.natsToken.empty())
             LOGW() << "Application: no token (AUTH_TOKEN); authenticate will likely fail";
+        // Authenticate with RETRY. NATS can be reachable while the backend's `authenticate`
+        // responder is not subscribed yet (e.g. the api is still starting right after a host
+        // reboot): the request then returns a no-responders EMPTY reply. Re-send every few
+        // seconds until we get a valid reply, so the reader recovers on its own instead of
+        // sitting connected-but-unauthenticated until a manual restart.
         authenticate();
+        const int authWaitMs = 5000;
+        while (running.load() && !authenticated_.load()) {
+            for (int slept = 0; slept < authWaitMs && running.load() && !authenticated_.load(); slept += 100)
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (running.load() && !authenticated_.load()) {
+                LOGW() << "Application: no valid auth reply yet (backend not ready?); re-sending authenticate";
+                authenticate();
+            }
+        }
+        if (!running.load()) return false;   // stop requested before we authenticated
     }
     LOGI() << "Application: started; authenticating then requesting settings";
     return true;
@@ -79,27 +94,39 @@ bool Application::start(std::atomic<bool>& running) {
 void Application::authenticate() {
     const std::string token = opts_.natsToken;
     const std::string reply = "response.token." + token;
-    transport_->subscribe(reply, [this](const std::string&, const std::string& p) { onAuthReply(p); });
+    // Subscribe to the reply subject ONCE; re-sends only re-publish the request.
+    if (!authSubscribed_) {
+        transport_->subscribe(reply, [this](const std::string&, const std::string& p) { onAuthReply(p); });
+        authSubscribed_ = true;
+    }
     json req = {{"token", token}};
     transport_->publishWithReply(opts_.authenticateSubject, req.dump(), reply);
     LOGI() << "Application: authentication request sent on '" << opts_.authenticateSubject << "'";
 }
 
 void Application::onAuthReply(const std::string& payload) {
+    if (authenticated_.load()) return;   // already authenticated; ignore duplicate/late replies
+    // A no-responders reply (backend's `authenticate` handler not up yet) arrives EMPTY.
+    // Leave authenticated_ false so start()'s loop re-sends once the backend is ready.
+    if (payload.empty()) {
+        LOGW() << "Application: empty auth reply (no responder yet — backend starting?); will retry";
+        return;
+    }
     try {
         json r = json::parse(payload);
         if (r.value("status", "") != "success") {
-            LOGE() << "Application: authentication failed: " << payload;
+            LOGE() << "Application: authentication failed: " << payload << " — will retry";
             return;
         }
         const auto& cid = r.at("client_id");
         clientId_ = cid.is_number_integer() ? std::to_string(cid.get<int>())
                                             : cid.get<std::string>();
+        authenticated_ = true;
         LOGI() << "Application: authenticated, client_id=" << clientId_;
         subscribeToCommands();
         requestSettings();
     } catch (const std::exception& e) {
-        LOGE() << "Application: bad auth reply: " << e.what();
+        LOGE() << "Application: bad auth reply: " << e.what() << " — will retry";
     }
 }
 

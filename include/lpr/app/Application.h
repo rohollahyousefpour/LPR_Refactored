@@ -116,6 +116,13 @@ private:
     Options opts_;
     std::unique_ptr<AppConfig> config_;              // local config file (model paths), if provided
     std::string clientId_;                           // assigned by the authenticate reply (lpr_id)
+    // Auth handshake state. `authenticated_` flips true once the backend returns a valid
+    // reply; start() re-sends the request until then, so a reader that connects while the
+    // backend's `authenticate` responder isn't up yet (no-responders EMPTY reply after a
+    // host reboot) recovers on its own instead of needing a manual restart. `authSubscribed_`
+    // ensures the reply subscription is set up only once across re-sends.
+    std::atomic<bool> authenticated_{false};
+    bool authSubscribed_ = false;
 
     // Manual-control live: while a gate is being adjusted, publish ONE "live_manual_control"
     // message per (throttled) frame carrying every sensor + its current exposure/gain.
