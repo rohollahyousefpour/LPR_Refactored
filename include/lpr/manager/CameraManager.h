@@ -50,6 +50,13 @@ public:
     // restart (they select which device/source is built).
     void reapplyCameraSettings();
 
+    // Live add/remove: reconcile the running workers with the current settings —
+    // STOP + drop a camera that disappeared (e.g. the operator deactivated it, so
+    // it is no longer in the pushed set) and BUILD + start a camera that newly
+    // appeared, without restarting the whole reader. Call on a live settings
+    // reload; survivors keep running and get their tuning via reapplyCameraSettings.
+    void reconcileCameras(MotionConfig defaults = {});
+
     // Route a manual command (NATS) to the camera whose gate == cameraId.
     // value is an opaque JSON-object string forwarded to the source. No-op (warns)
     // if no camera matches.
@@ -75,6 +82,10 @@ public:
     bool readPreset(const std::string& cameraId, const std::string& serial, std::string& out);
 
 private:
+    // Build one worker for camera `id` from its settings (shared by
+    // buildFromSettings and reconcileCameras). Does NOT start it.
+    void addCameraFromSettings(int id, MotionConfig defaults);
+
     std::vector<std::unique_ptr<CameraWorker>> workers_;
     CameraWorker::FrameSink rawObserver_;
     CameraWorker::FirstFrameCallback firstFrame_;

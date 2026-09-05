@@ -581,7 +581,13 @@ DirectionEstimator::Config Application::readDirectionConfig() {
 void Application::reapplyLiveSettings() {
     if (processor_) processor_->setConfig(readPlateConfig());
     if (worker_)    worker_->setDirectionConfig(readDirectionConfig());
-    if (cameras_)   cameras_->reapplyCameraSettings();   // motion-gate tuning + hardware reconnect (exposure/GigE/AOI/trigger)
+    if (cameras_) {
+        // Live add/remove FIRST: a camera the operator deactivated is gone from the
+        // pushed set and gets stopped; a reactivated one is built + started. Then
+        // reapply tuning to the survivors.
+        cameras_->reconcileCameras();   // default MotionConfig, matching buildFromSettings()
+        cameras_->reapplyCameraSettings();   // motion-gate tuning + hardware reconnect (exposure/GigE/AOI/trigger)
+    }
     auto& sm = SettingsManager::instance();
     LOGI() << "Application: settings applied LIVE — plate(minVotes=" << sm.getLpr<int>("min_votes").value_or(1)
            << " sim=" << sm.getLpr<float>("plate_similarity").value_or(0.9f)

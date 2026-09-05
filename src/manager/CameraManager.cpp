@@ -1,6 +1,7 @@
 #include "lpr/manager/CameraManager.h"
 #include "lpr/Log.h"
 #include "lpr/config/SettingsManager.h"
+#include <set>
 #include <string>
 
 namespace lpr {
@@ -102,39 +103,87 @@ bool CameraManager::readPreset(const std::string& cameraId, const std::string& s
 
 // --- settings-driven construction (bridge to the ported SettingsManager) ---
 namespace lpr {
+void CameraManager::addCameraFromSettings(int id, MotionConfig defaults) {
+    auto& s = SettingsManager::instance();
+    CameraSourceParams p;
+    p.gate        = std::to_string(id);
+    p.typeOfLink  = s.getCameraSettingByIdAndKey<std::string>(id, "type_of_link").value_or("");
+    p.address     = s.getCameraSettingByIdAndKey<std::string>(id, "CameraAddress").value_or("");
+    p.monoAddress = s.getCameraSettingByIdAndKey<std::string>(id, "MonoCameraAddress").value_or("");
+    p.delayMs     = s.getCameraSettingByIdAndKey<int>(id, "CameraDelayTime").value_or(defaults.delayMs);
+
+    MotionConfig cfg = defaults;
+    cfg.delayMs      = p.delayMs;
+    cfg.minDeviation = s.getCameraSettingByIdAndKey<float>(id, "MinDeviation").value_or((float)defaults.minDeviation);
+    cfg.maxDeviation = s.getCameraSettingByIdAndKey<float>(id, "MaxDeviation").value_or((float)defaults.maxDeviation);
+    // ObjectSize = minimum number of changed pixels to treat as real motion (original: num_obj).
+    cfg.minChangedPixels = s.getCameraSettingByIdAndKey<int>(id, "ObjectSize").value_or(defaults.minChangedPixels);
+    // Mono+RGB pair: detect on the mono (MonoCameraAddress) and keep the RGB (CameraAddress)
+    // as the evidence image. For Basler the facade already delivers the pair mono-first, so
+    // detection stays on the primary; for IP/video/rtsp the mono is the SECONDARY stream.
+    {
+        const bool hasMono  = !p.monoAddress.empty() && p.monoAddress != "-1";
+        const bool isBasler = (p.typeOfLink == "pylon");
+        cfg.detectOnSecondary = hasMono && !isBasler;
+        // Operator switch: detect on the colour stream of a Basler mono+colour pair.
+        cfg.detectOnColor = isBasler && hasMono &&
+            s.getCameraSettingByIdAndKey<int>(id, "detect_on_rgb").value_or(0) == 1;
+    }
+    // Note: detection-stage ROI/mask (getGeneralRoi/cropAndMask) is applied by
+    // RoiCropRecognizer in the detection pipeline, not by the motion gate here.
+
+    addCamera(p, cfg);
+}
+
 void CameraManager::buildFromSettings(MotionConfig defaults) {
     auto& s = SettingsManager::instance();
-    for (int id : s.getCameraIds()) {
-        CameraSourceParams p;
-        p.gate        = std::to_string(id);
-        p.typeOfLink  = s.getCameraSettingByIdAndKey<std::string>(id, "type_of_link").value_or("");
-        p.address     = s.getCameraSettingByIdAndKey<std::string>(id, "CameraAddress").value_or("");
-        p.monoAddress = s.getCameraSettingByIdAndKey<std::string>(id, "MonoCameraAddress").value_or("");
-        p.delayMs     = s.getCameraSettingByIdAndKey<int>(id, "CameraDelayTime").value_or(defaults.delayMs);
-
-        MotionConfig cfg = defaults;
-        cfg.delayMs      = p.delayMs;
-        cfg.minDeviation = s.getCameraSettingByIdAndKey<float>(id, "MinDeviation").value_or((float)defaults.minDeviation);
-        cfg.maxDeviation = s.getCameraSettingByIdAndKey<float>(id, "MaxDeviation").value_or((float)defaults.maxDeviation);
-        // ObjectSize = minimum number of changed pixels to treat as real motion (original: num_obj).
-        cfg.minChangedPixels = s.getCameraSettingByIdAndKey<int>(id, "ObjectSize").value_or(defaults.minChangedPixels);
-        // Mono+RGB pair: detect on the mono (MonoCameraAddress) and keep the RGB (CameraAddress)
-        // as the evidence image. For Basler the facade already delivers the pair mono-first, so
-        // detection stays on the primary; for IP/video/rtsp the mono is the SECONDARY stream.
-        {
-            const bool hasMono  = !p.monoAddress.empty() && p.monoAddress != "-1";
-            const bool isBasler = (p.typeOfLink == "pylon");
-            cfg.detectOnSecondary = hasMono && !isBasler;
-            // Operator switch: detect on the colour stream of a Basler mono+colour pair.
-            cfg.detectOnColor = isBasler && hasMono &&
-                s.getCameraSettingByIdAndKey<int>(id, "detect_on_rgb").value_or(0) == 1;
-        }
-        // Note: detection-stage ROI/mask (getGeneralRoi/cropAndMask) is applied by
-        // RoiCropRecognizer in the detection pipeline, not by the motion gate here.
-
-        addCamera(p, cfg);
-    }
+    for (int id : s.getCameraIds()) addCameraFromSettings(id, defaults);
     LOGI() << "CameraManager: built " << workers_.size() << " camera(s) from settings";
+}
+
+void CameraManager::reconcileCameras(MotionConfig defaults) {
+    auto& s = SettingsManager::instance();
+    // Desired camera ids from the freshly-loaded settings.
+    std::set<int> desired;
+    for (int id : s.getCameraIds()) desired.insert(id);
+
+    // 1) Stop + drop workers whose camera is no longer in settings (deactivated).
+    int removed = 0;
+    for (auto it = workers_.begin(); it != workers_.end();) {
+        int id = -1;
+        if (*it) { try { id = std::stoi((*it)->gate()); } catch (...) { id = -1; } }
+        if (id < 0 || desired.count(id) == 0) {
+            if (*it) {
+                LOGI() << "CameraManager: camera gate=" << (*it)->gate()
+                       << " removed from settings -> stopping";
+                (*it)->stop();   // joins the worker thread before we drop it
+            }
+            it = workers_.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+
+    // 2) Build + start workers for cameras that newly appeared (activated).
+    std::set<int> present;
+    for (auto& w : workers_)
+        if (w) { try { present.insert(std::stoi(w->gate())); } catch (...) {} }
+    int added = 0;
+    for (int id : desired) {
+        if (present.count(id)) continue;
+        const std::size_t before = workers_.size();
+        addCameraFromSettings(id, defaults);
+        if (workers_.size() > before && workers_.back()) {
+            workers_.back()->start();   // start just the new worker; others keep running
+            LOGI() << "CameraManager: camera gate=" << id << " added from settings -> started";
+            ++added;
+        }
+    }
+
+    if (removed || added)
+        LOGI() << "CameraManager: reconciled cameras (removed=" << removed
+               << ", added=" << added << ", now=" << workers_.size() << ")";
 }
 
 void CameraManager::reapplyCameraSettings() {
