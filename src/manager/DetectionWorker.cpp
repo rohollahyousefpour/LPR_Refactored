@@ -96,6 +96,11 @@ std::string DetectionWorker::passIdFor(const std::string& gate, const std::strin
         else if (st.lastInterval > 0 && gap > 3 * st.lastInterval) fresh = true;
         else st.lastInterval = gap;   // first gap (or in-cadence) -> learn it, don't reset
     }
+    // A clearly different plate at the same gate starts a new pass so two vehicles are
+    // never merged. Threshold = passPlateSimilarity (empirically 0 duplicates AND 0
+    // merges across the test set; a lower threshold merged distinct cars). OCR flicker
+    // within a pass is smoothed by the PlateProcessor consensus BEFORE it reaches here,
+    // so this does not spuriously split one car.
     const bool differentPlate = !fresh && !st.text.empty() && !text.empty() &&
         jaroWinklerDistance(st.text, text) < cfg_.passPlateSimilarity;
     if (fresh || differentPlate) {
@@ -103,6 +108,7 @@ std::string DetectionWorker::passIdFor(const std::string& gate, const std::strin
         st.emittedEarly = false;
         st.lastSentDir = -1;
         st.lastInterval = 0;
+        st.lastSentText.clear();
     }
     if (!text.empty()) st.text = text;   // keep the reference; an empty (no-OCR) frame must
                                          // NOT erase it or the next differentPlate check fails
@@ -369,6 +375,7 @@ void DetectionWorker::process(FrameItem& item) {
                     st.emittedEarly = true;
                     st.lastSentDir  = phys;
                     st.pendingEarly = false;
+                    st.lastSentText = st.pendingItem.plate.text;
                     emitPlate(std::move(st.pendingItem));  // the announce that was held, now freed
                 }
                 continue;
@@ -451,14 +458,23 @@ void DetectionWorker::process(FrameItem& item) {
             st.emittedEarly = true;
             st.lastSentDir   = phys;
             st.pendingEarly  = false;
+            st.lastSentText  = out.plate.text;
             emitPlate(std::move(out));                      // EARLY (now usually with a settled direction)
-        } else if (phys != 0 && phys != st.lastSentDir) {
-            out.plate.direction = phys;
-            out.forceSend       = true;                     // CORRECTION (bypass cooldown)
-            st.lastSentDir      = phys;
+        } else if ((phys != 0 && phys != st.lastSentDir) ||
+                   (!out.plate.text.empty() && out.plate.text != st.lastSentText)) {
+            // Re-emit a CORRECTION (same passId, forceSend) when EITHER the direction
+            // settled/flipped OR the weighted-consensus vote corrected the plate TEXT.
+            // Previously only a direction change re-emitted, so a text-only consensus
+            // correction after the early announce was silently dropped here — the live
+            // view kept the wrong early read. out.plate.votes carries the vote strength
+            // so the backend keeps the higher-voted text.
+            if (phys != 0) { out.plate.direction = phys; st.lastSentDir = phys; }
+            else           { out.plate.direction = st.lastSentDir >= 0 ? st.lastSentDir : 0; }
+            out.forceSend   = true;                         // bypass the per-plate cooldown
+            st.lastSentText = out.plate.text;
             emitPlate(std::move(out));
         }
-        // else: already announced with the same direction -> nothing to send.
+        // else: already announced with the same text and direction -> nothing to send.
     }
 }
 

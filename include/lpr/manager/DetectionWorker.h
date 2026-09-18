@@ -125,6 +125,9 @@ private:
     // pendingSince is the dir_ sighting count when the hold began, so the window is measured in
     // REAL sightings (which grow every frame) not kept reads (which de-dup pins at 1).
     struct PassState { std::string passId; std::string text; long lastSeenMs = 0; long lastInterval = 0; bool emittedEarly = false; int lastSentDir = -1;
+                       std::string lastSentText;   // last plate TEXT emitted for this pass, so a
+                                                   // consensus text-correction (same direction) is
+                                                   // re-emitted instead of silently swallowed.
                        bool pendingEarly = false; PlateItem pendingItem; int pendingSince = 0; };
     std::unordered_map<std::string, PassState> passes_;
     // Last enter/exit direction we LOGGED per gate, so the direction line can label

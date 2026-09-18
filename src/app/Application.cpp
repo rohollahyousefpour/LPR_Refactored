@@ -540,11 +540,14 @@ std::unique_ptr<IPlateRecognizer> Application::buildRecognizerChain() {
 PlateProcessorConfig Application::readPlateConfig() {
     auto& sm = SettingsManager::instance();
     PlateProcessorConfig pp;   // capture-all defaults
-    pp.minVotes            = sm.getLpr<int>("min_votes").value_or(pp.minVotes);
     pp.similarityThreshold = static_cast<double>(sm.getLpr<float>("plate_similarity").value_or(static_cast<float>(pp.similarityThreshold)));
     pp.minConfidence       = sm.getLpr<float>("ocr_prob").value_or(pp.minConfidence);
     pp.passGapMs           = sm.getLpr<int>("plate_pass_gap_ms").value_or(static_cast<int>(pp.passGapMs));
     pp.maxPlateCharDiffs   = sm.getLpr<int>("plate_max_char_diffs").value_or(pp.maxPlateCharDiffs);
+    // «min_votes» drives the consensus gate: below this many reads a pass emits its best
+    // single (largest/clearest) frame; from here on the weighted vote decides the text.
+    // (Previously read into a dead `minVotes` field and ignored; now it is the live knob.)
+    pp.minConsensusVotes   = sm.getLpr<int>("min_votes").value_or(pp.minConsensusVotes);
     pp.diag = [this](std::string j) { if (transport_) transport_->publish("messages.module_diag", j); };
     return pp;
 }
@@ -589,8 +592,7 @@ void Application::reapplyLiveSettings() {
         cameras_->reapplyCameraSettings();   // motion-gate tuning + hardware reconnect (exposure/GigE/AOI/trigger)
     }
     auto& sm = SettingsManager::instance();
-    LOGI() << "Application: settings applied LIVE — plate(minVotes=" << sm.getLpr<int>("min_votes").value_or(1)
-           << " sim=" << sm.getLpr<float>("plate_similarity").value_or(0.9f)
+    LOGI() << "Application: settings applied LIVE — plate(sim=" << sm.getLpr<float>("plate_similarity").value_or(0.9f)
            << " maxDiffs=" << sm.getLpr<int>("plate_max_char_diffs").value_or(2)
            << ") direction(minSightings=" << sm.getLpr<int>("direction_min_sightings").value_or(3)
            << " growth=" << sm.getLpr<float>("direction_min_growth").value_or(1.15f)
@@ -639,8 +641,8 @@ void Application::bootstrapFromJson(const json& settingsBody) {
     // diag hook publishes notable OCR-consensus overrides as module-diag events.
     PlateProcessorConfig ppcfg = readPlateConfig();
     processor_ = std::make_unique<PlateProcessor>(ppcfg);
-    LOGI() << "Application: plate processor minVotes=" << ppcfg.minVotes
-           << " similarity=" << ppcfg.similarityThreshold << " minConf=" << ppcfg.minConfidence
+    LOGI() << "Application: plate processor similarity=" << ppcfg.similarityThreshold
+           << " minConf=" << ppcfg.minConfidence
            << " passGapMs=" << ppcfg.passGapMs << " (send-once-per-pass, best read)";
     // Recording size/quality knobs. Defaults favor small files (CRF 30); all overridable from
     // settings without recompiling: recording_crf, recording_preset, recording_fps,

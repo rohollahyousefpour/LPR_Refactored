@@ -28,7 +28,6 @@ public:
     int deep_plate_width_1 = 0, deep_plate_width_2 = 0, deep_plate_height = 0;
     int deep_width = 0, deep_height = 0;
     float deep_detect_prob = 0.0f;
-    int combine_plates = 0;
     float max_IOU = 0.0f, min_IOU = 0.0f;
     int nation_alpr = 0;
 
@@ -40,7 +39,6 @@ public:
 
     // ---- capture ----
     int CameraDelayTime = 0;
-    int num_send_frame = 0, num_frame_process = 0;
     std::vector<std::string> CameraAddress;
     std::string type_of_link;
     std::vector<std::string> gates;
@@ -59,7 +57,6 @@ public:
     int relay_port = 0;
     int debug = 0;
     int video = 0;
-    int last_read_send = 0;
     int use_cpu = 0, use_cuda = 0, TCP_IP = 0;
     int car_detection = 0, multi_language = 0;
     std::string base_api;

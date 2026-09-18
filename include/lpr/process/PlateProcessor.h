@@ -31,8 +31,6 @@ bool checkPlate8(const std::string& s);
 struct PlateProcessorConfig {
     PlateValidator validator = &checkPlate8;  // set to nullptr to accept any non-empty text
     double similarityThreshold = 0.90;        // Jaro-Winkler clustering (AlprPlate used 0.9)
-    int    minVotes            = 1;           // reads required before a pass may emit (1 = never
-                                              // drop a single-frame car)
     float  minConfidence       = 0.0f;        // ignore OCR reads weaker than this
     bool   emitOnce            = true;        // emit each car-pass exactly once
     long   trackTtlMs          = 5000;        // evict clusters idle longer than this (0 = never)
@@ -81,7 +79,6 @@ public:
     // harmless (self-corrects on the next read).
     void setConfig(const PlateProcessorConfig& c) {
         cfg_.similarityThreshold = c.similarityThreshold;
-        cfg_.minVotes            = c.minVotes;
         cfg_.minConfidence       = c.minConfidence;
         cfg_.trackTtlMs          = c.trackTtlMs;
         cfg_.passGapMs           = c.passGapMs;
@@ -98,8 +95,13 @@ private:
         std::string lastSent;
         bool        sent = false;
         long        lastUpdateMs = 0;
-        PlateResult best;            // LARGEST (closest) plate sample — its crop is stored
+        PlateResult best;            // LARGEST (closest) plate sample — text fallback
         double      bestSize = 0.0;  // area of `best`'s plate box, for the largest-plate pick
+        // Largest-crop sample PER distinct read text, so the emitted row's image is the
+        // best frame of the text the VOTE actually chose (not merely the biggest crop,
+        // whose OCR may disagree with the consensus) — keeps plate_number and image aligned.
+        std::unordered_map<std::string, PlateResult> bestByText;
+        std::unordered_map<std::string, double>      sizeByText;
         std::string passId;          // stable per-pass UUID: lets the backend correlate the first
                                      // emit and every later consensus re-send to the SAME row,
                                      // even for UNTRACKED plates (no ByteTrack id) — so refining

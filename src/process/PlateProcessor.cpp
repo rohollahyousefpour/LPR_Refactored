@@ -123,6 +123,15 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     // Keep the LARGEST-plate sample as `best` — its crop (highest resolution) is what
     // gets stored/sent, and it is the text fallback when the vote is empty.
     if (tr.reads.size() == 1 || sz > tr.bestSize) { tr.best = plate; tr.bestSize = sz; }
+    // Track the largest crop for THIS read's text, so the emitted image can be taken from
+    // the winning text's own best frame (see the emit below) — text and image stay aligned.
+    {
+        auto szIt = tr.sizeByText.find(plate.text);
+        if (szIt == tr.sizeByText.end() || sz > szIt->second) {
+            tr.bestByText[plate.text] = plate;
+            tr.sizeByText[plate.text] = sz;
+        }
+    }
     if (tr.passId.empty()) tr.passId = generateUuidV4();   // stable id for this pass (first read)
     tr.consensus = weightedConsensus(tr.reads);   // representative text for pass clustering only
 
@@ -161,7 +170,11 @@ std::optional<PlateResult> PlateProcessor::process(PlateResult plate) {
     tr.sent = true;
     tr.lastSent = chosen;
 
-    PlateResult out = tr.best;        // best-quality sample: image / box / coords / confidence
+    // Image/box/confidence from the CHOSEN (voted) text's own largest frame, so the stored
+    // crop shows the same plate as `plate_number`. Fall back to the overall largest sample
+    // if the chosen text has no recorded frame (shouldn't happen — `chosen` is a read text).
+    auto cropIt = tr.bestByText.find(chosen);
+    PlateResult out = (cropIt != tr.bestByText.end()) ? cropIt->second : tr.best;
     out.text = chosen;
     out.votes = static_cast<int>(tr.reads.size());   // vote strength for backend correlation
     out.trackId = plate.trackId;

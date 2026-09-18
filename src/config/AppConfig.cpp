@@ -98,15 +98,12 @@ AppConfig::AppConfig(const std::string& configPath) {
     deep_width         = getInt(d, "deep_width");
     deep_height        = getInt(d, "deep_height");
     deep_detect_prob   = getFloat(d, "deep_detect_prob");
-    combine_plates     = getInt(d, "combine_plates");
     max_IOU            = getFloat(d, "max_IOU");
     min_IOU            = getFloat(d, "min_IOU");
     nation_alpr        = getInt(d, "nation_alpr");
     ocr_file           = getStr(d, "ocr_file");
     car_file           = getStr(d, "car_file");
     plate_detection_file = getStr(d, "plate_detection_file");
-    num_frame_process  = getInt(d, "num_frame_process");
-    num_send_frame     = getInt(d, "num_send_frame");
     live_scale         = getInt(d, "live_scale");
     gates              = split(getStr(d, "gate"), ',');
     CameraAddress      = split(getStr(d, "CameraAddress"), ',');
@@ -120,7 +117,6 @@ AppConfig::AppConfig(const std::string& configPath) {
     show_live          = getInt(d, "show_live");
     ocr_prob           = getFloat(d, "ocr_prob");
     use_cpu            = getInt(d, "use_cpu");
-    last_read_send     = getInt(d, "last_read_send");
     use_cuda           = getInt(d, "use_cuda");
     TCP_IP             = getInt(d, "TCP_IP");
     car_detection      = getInt(d, "car_detection");
