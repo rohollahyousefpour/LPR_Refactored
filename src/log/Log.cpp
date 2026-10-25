@@ -117,26 +117,41 @@ bool Logger::isEnabled(Level lvl) const {
 
 void Logger::write(Level lvl, const std::string& message) {
     const std::string ts  = formatLocalTime("%Y-%m-%d %H:%M:%S");
+    const std::string iso = formatLocalTime("%Y-%m-%dT%H:%M:%S");   // ISO-ish, for the live stream
     const std::string day = formatLocalTime("%Y-%m-%d");
     std::string line = "[" + ts + "] [" + toString(lvl) + "] " + message + "\n";
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (console_)
-        std::clog << line;
+    Sink sinkCopy;   // copied under the lock, invoked AFTER it is released
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (console_)
+            std::clog << line;
 
-    if (fileOk_) {
-        if (day != currentDate_) {                     // new day -> new file + purge old
-            openFile(day, 0);
-            purgeOldLogs();
+        if (fileOk_) {
+            if (day != currentDate_) {                     // new day -> new file + purge old
+                openFile(day, 0);
+                purgeOldLogs();
+            }
+            else if (bytes_ + line.size() > maxBytes_)     // size cap -> next index
+                openFile(currentDate_, index_ + 1);
+            file_ << line;
+            file_.flush();
+            bytes_ += line.size();
+        } else if (!console_) {
+            std::clog << line;                             // never silently drop
         }
-        else if (bytes_ + line.size() > maxBytes_)     // size cap -> next index
-            openFile(currentDate_, index_ + 1);
-        file_ << line;
-        file_.flush();
-        bytes_ += line.size();
-    } else if (!console_) {
-        std::clog << line;                             // never silently drop
+        sinkCopy = sink_;
     }
+
+    // Tee to the live-log forwarder OUTSIDE the lock, so a slow/failing publish
+    // never blocks logging and can't deadlock by re-entering write().
+    if (sinkCopy)
+        sinkCopy(lvl, iso, message);
+}
+
+void Logger::setSink(Sink sink) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sink_ = std::move(sink);
 }
 
 LogStream::~LogStream() {

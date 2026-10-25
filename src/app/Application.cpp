@@ -17,6 +17,7 @@
 #endif
 #include "lpr/net/SystemResourceMonitor.h"
 #include "lpr/net/ModuleDiag.h"
+#include "lpr/net/LogForwarder.h"
 
 namespace lpr {
 
@@ -123,6 +124,18 @@ void Application::onAuthReply(const std::string& payload) {
                                             : cid.get<std::string>();
         authenticated_ = true;
         LOGI() << "Application: authenticated, client_id=" << clientId_;
+        // Wire on-demand live-log streaming now that transport + client_id are
+        // ready: the forwarder publishes to NATS when the backend turns it on
+        // (log_stream command); the Logger tees every line through it.
+        lpr::logfwd::configure(
+            [this](const std::string& subj, const std::string& payload) {
+                if (transport_) transport_->publish(subj, payload);
+            },
+            clientId_);
+        lpr::Logger::instance().setSink(
+            [](lpr::Level lv, const std::string& iso, const std::string& msg) {
+                lpr::logfwd::onLogLine(lv, iso, msg);
+            });
         subscribeToCommands();
         requestSettings();
     } catch (const std::exception& e) {
@@ -165,6 +178,24 @@ void Application::onCommand(const std::string& payload) {
                     router_->stopLiveView(cid);
                 } else {
                     LOGW() << "Application: stop_streaming command needs camera_id";
+                }
+            }
+            else if (ct == "log_stream") {
+                // Backend asks us to stream (or stop streaming) our live log over
+                // NATS while an operator watches it in the panel. `start` carries a
+                // safety window (durationSeconds); the backend re-sends it as a
+                // keep-alive, so the stream auto-stops if the viewer/backend goes
+                // away without a clean `stop`.
+                const json* actN = findAnyKeyDeep(cmd, {"action", "state"});
+                const std::string action = (actN && actN->is_string()) ? actN->get<std::string>() : "start";
+                if (action == "stop" || action == "off") {
+                    LOGI() << "Application: -> log_stream STOP";
+                    lpr::logfwd::stop();
+                } else {
+                    const json* durN = findAnyKeyDeep(cmd, {"durationSeconds", "duration"});
+                    int dur = (durN && durN->is_number_integer()) ? durN->get<int>() : 45;
+                    LOGI() << "Application: -> log_stream START (window " << dur << "s)";
+                    lpr::logfwd::start(dur);
                 }
             }
             else if (ct == "set_config") { LOGI() << "Application: -> setCameraConfig"; router_->setCameraConfig(cmd); }

@@ -9,6 +9,7 @@
 #include <mutex>
 #include <cstddef>
 #include <exception>
+#include <functional>
 
 namespace lpr {
 
@@ -31,6 +32,12 @@ public:
 
     void write(Level lvl, const std::string& message);
 
+    // Optional sink invoked for EVERY written line, AFTER it is written to the
+    // file/console and OUTSIDE the internal lock. Used to tee the live log to the
+    // backend on demand (see lpr::logfwd). Set once at startup; thread-safe.
+    using Sink = std::function<void(Level lvl, const std::string& isoTime, const std::string& message)>;
+    void setSink(Sink sink);
+
 private:
     Logger() = default;
     void openFile(const std::string& day, int index);   // caller holds mutex_
@@ -48,6 +55,7 @@ private:
     Level        minLevel_ = Level::Trace;
     bool         console_  = false;
     bool         fileOk_   = false;
+    Sink         sink_;     // optional live-log tee (guarded by mutex_)
 };
 
 // RAII stream: accumulates a line, writes it to the Logger on destruction.

@@ -355,7 +355,7 @@ if(OpenCV_FOUND)
   message(STATUS "  + services: Recording + LiveView + CommandRouter")
 
   # ---- messaging (plate sending + camera connect/disconnect; transport behind IMessageTransport) ----
-  set(LPR_NET_SRC src/net/PlateSender.cpp src/net/CameraStatusNotifier.cpp src/net/MediaSender.cpp src/net/HeartbeatMonitor.cpp src/net/SystemResourceMonitor.cpp)
+  set(LPR_NET_SRC src/net/PlateSender.cpp src/net/CameraStatusNotifier.cpp src/net/MediaSender.cpp src/net/HeartbeatMonitor.cpp src/net/SystemResourceMonitor.cpp src/net/LogForwarder.cpp)
   set(LPR_NET_LIBS lpr_core lpr_detect lpr_json lpr_log ${OpenCV_LIBS})
   if(WITH_NATS)
     find_path(NATS_INC nats/nats.h)
