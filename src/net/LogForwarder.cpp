@@ -60,6 +60,13 @@ void onLogLine(lpr::Level level, const std::string& isoTime, const std::string& 
     if (t_inForward) return;                                 // don't forward our own publish logs
     if (!g_active.load(std::memory_order_relaxed)) return;   // streaming off — cheap exit
 
+    // Never forward the transport's own publish/enqueue/dequeue chatter: each such
+    // line is produced *by* forwarding a line, and its background SENDER thread
+    // logs it (so the thread_local guard above can't catch it) — forwarding it
+    // back creates a self-amplifying feedback loop that saturates the send queue.
+    // Filtering by source breaks the loop and also keeps the live view readable.
+    if (message.rfind("NatsTransport:", 0) == 0) return;
+
     Sink        sink;
     std::string clientId;
     {
