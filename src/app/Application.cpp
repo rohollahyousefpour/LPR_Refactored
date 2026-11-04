@@ -165,6 +165,7 @@ void Application::onCommand(const std::string& payload) {
         // THEN fire the restart handler so the backend sees the acknowledgment before the
         // reader exits and re-launches.
         bool restartAfterAck = false;
+        bool updateAfterAck = false;
         if (router_) {
             if      (ct == "recording")  { LOGI() << "Application: -> startRecording"; router_->startRecording(cmd); }
             else if (ct == "streaming")  { LOGI() << "Application: -> liveView";       router_->liveView(cmd); }
@@ -205,6 +206,14 @@ void Application::onCommand(const std::string& payload) {
                 // API). Defer the actual re-launch until after the ack is published.
                 LOGW() << "Application: -> reset_lpr (restart requested by backend)";
                 restartAfterAck = true;
+            }
+            else if (ct == "update") {
+                // Backend-initiated OTA install (phase 3). We do NOT install here;
+                // main() writes an update marker and stops WITHOUT re-exec, so the
+                // supervising Updater swaps the files and relaunches. Defer firing
+                // until after the ack, like the restart command.
+                LOGW() << "Application: -> update (OTA install requested by backend)";
+                updateAfterAck = true;
             }
             else if (ct == "screenshot" || ct == "get_screenshot" || ct == "camera_screenshot") {
                 const json* idN = findAnyKeyDeep(cmd, {"camera_id", "cameraId", "gate_id", "gate", "id"});
@@ -282,6 +291,21 @@ void Application::onCommand(const std::string& payload) {
             LOGW() << "Application: restart handler firing after ack";
             if (onRestart_) onRestart_();
             else LOGW() << "Application: reset_lpr received but no restart handler set";
+        }
+
+        // OTA update: hand the command to main() (writes the marker + stops without
+        // re-exec, so the Updater takes over). Fired after the ack, like restart.
+        if (updateAfterAck) {
+            LOGW() << "Application: update handler firing after ack";
+            if (onUpdate_) {
+                // Hand the Updater the INNER command data (messageBody.data), so the
+                // marker carries version/release_id/deployment_id/package_sha256/
+                // signature at the top level — not the NATS envelope around them.
+                const json* dataNode = findAnyKeyDeep(cmd, {"data"});
+                onUpdate_(dataNode ? *dataNode : cmd);
+            } else {
+                LOGW() << "Application: update received but no update handler set";
+            }
         }
     } catch (const std::exception& e) {
         LOGE() << "Application: bad command: " << e.what();

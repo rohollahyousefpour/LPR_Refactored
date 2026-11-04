@@ -11,6 +11,7 @@
 //
 // Offline mode (no broker): pass a settings JSON directly via bootstrapFromJson() for
 // local runs/tests.
+#include <nlohmann/json.hpp>   // json type used by the update handler signature
 #include "lpr/net/IMessageTransport.h"
 #include "lpr/manager/CameraManager.h"
 #include "lpr/manager/DetectionWorker.h"
@@ -92,6 +93,16 @@ public:
     using RestartHandler = std::function<void()>;
     void setRestartHandler(RestartHandler h) { onRestart_ = std::move(h); }
 
+    // Backend-initiated OTA update (command_type "update"): onCommand acks it and
+    // then invokes this handler with the command JSON (version, release_id,
+    // deployment_id, package_sha256, signature, storage_key). main() wires it to
+    // write an update MARKER next to the exe and stop WITHOUT re-exec, so the
+    // supervising Updater process regains control, swaps the files, and relaunches
+    // the reader. Like the restart handler, it must only do quick work + flip the
+    // run flag (it runs on the NATS callback thread).
+    using UpdateHandler = std::function<void(const nlohmann::json&)>;
+    void setUpdateHandler(UpdateHandler h) { onUpdate_ = std::move(h); }
+
     IMessageTransport* transport() { return transport_.get(); }
 
 private:
@@ -167,6 +178,7 @@ private:
     std::atomic<bool> booted_{false};
     std::atomic<bool> running_{false};
     RestartHandler    onRestart_;                    // set by main(); fired on a reset_lpr command
+    UpdateHandler     onUpdate_;                     // set by main(); fired on an "update" (OTA) command
 };
 
 } // namespace lpr

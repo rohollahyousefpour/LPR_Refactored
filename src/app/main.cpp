@@ -179,6 +179,31 @@ int main(int argc, char** argv) {
         running = false;
     });
 
+    // Backend "update the LPR" command (OTA, phase 3): write an update MARKER next
+    // to the exe and stop WITHOUT restartRequested, so this process exits (no
+    // self re-exec) and the supervising Updater swaps the files + relaunches. The
+    // marker carries the release metadata the Updater needs (version,
+    // deployment_id, package_sha256, signature, storage_key).
+    app.setUpdateHandler([&running](const nlohmann::json& cmd) {
+        try {
+            // The Updater sets LPR_STATE_DIR to a STABLE path (independent of which
+            // versioned dir the exe currently runs from); fall back to <exe>/state.
+            const std::string stateDir = env("LPR_STATE_DIR");
+            const std::filesystem::path dir =
+                stateDir.empty() ? (std::filesystem::path(exeDir()) / "state")
+                                 : std::filesystem::path(stateDir);
+            std::error_code ec;
+            std::filesystem::create_directories(dir, ec);
+            const std::string marker = (dir / "update.pending.json").string();
+            std::ofstream f(marker, std::ios::trunc);
+            if (f) f << cmd.dump(2);
+            LOGW() << "lpr: wrote OTA update marker to " << marker;
+        } catch (const std::exception& e) {
+            LOGE() << "lpr: failed to write update marker: " << e.what();
+        }
+        running = false;   // exit WITHOUT restartRequested -> the Updater takes over
+    });
+
     if (!settingsFile.empty()) {
         // Offline: load settings JSON and bootstrap directly.
         std::ifstream f(settingsFile);

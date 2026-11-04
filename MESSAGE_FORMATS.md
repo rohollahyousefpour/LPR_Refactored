@@ -107,9 +107,13 @@ Emitted by `HeartbeatMonitor`, alternating with resources every `intervalMs`.
   "messageId": "<uuid>",
   "messageType": "heartbeat",
   "lpr_id": "<client id>",
-  "messageBody": { "info": "I am Live" }
+  "messageBody": { "info": "I am Live", "version": "1.0.0", "build": 1 }
 }
 ```
+`version`/`build` are the running module's reported version (OTA phase 1), stamped
+at compile time from `lpr/Version.h`. The server stores them against the LPR so the
+panel can show each reader's build; a payload without them leaves the stored
+version unchanged.
 
 ---
 

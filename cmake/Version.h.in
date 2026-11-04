@@ -1,0 +1,11 @@
+#pragma once
+// Generated from cmake/Version.h.in by CMake's configure_file -- DO NOT EDIT.
+//
+// Single source of truth for the plate-reader module's reported version. Change
+// the version in CMakeLists.txt (project(lpr ... VERSION x.y.z)); set the build
+// number at configure time with -DLPR_BUILD=<n> (CI stamps the real number).
+// The version is sent in every heartbeat (see HeartbeatMonitor) so the panel can
+// show which build each reader is actually running -- the basis of OTA updates.
+
+#define LPR_VERSION "@PROJECT_VERSION@"
+#define LPR_BUILD   @LPR_BUILD@

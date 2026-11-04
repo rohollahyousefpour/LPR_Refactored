@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(lpr LANGUAGES CXX VERSION 0.1)
+project(lpr LANGUAGES CXX VERSION 1.0.0)
 
 # Guard against an accidental 32-bit (x86) toolchain. The dependencies (OpenCV,
 # GStreamer, OpenVINO, TensorRT, ONNX Runtime) are all 64-bit, so an x86 build
@@ -33,6 +33,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
+
+# ---- reported version (OTA phase 1) --------------------------------------
+# The module stamps PROJECT_VERSION + a build number into a generated
+# lpr/Version.h, which HeartbeatMonitor sends to the server. One place to bump:
+# the project(... VERSION) above; CI passes -DLPR_BUILD=<n> for the build number.
+set(LPR_BUILD "1" CACHE STRING "Build number stamped into the reported version")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/lpr/Version.h"
+  @ONLY)
+# Make the generated header visible to every target as <lpr/Version.h>.
+include_directories("${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 option(LPR_BUILD_TESTS      "Build unit tests"                         ON)
 option(LPR_BUILD_CONFIG_LIB "Build the full config library (needs OpenCV)" ON)
